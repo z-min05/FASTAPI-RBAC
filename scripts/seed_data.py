@@ -1,6 +1,7 @@
 import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, engine
+from app.models.base import Base
 from app.security import get_password_hash
 from app.models.user import User
 from app.models.role import Role
@@ -14,6 +15,11 @@ from sqlalchemy import select
 
 
 async def seed():
+    # 先创建所有表
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    print("数据库表创建完成")
+
     async with AsyncSessionLocal() as db:
         # 检查是否已有数据
         result = await db.execute(select(User).limit(1))
