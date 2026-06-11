@@ -7,12 +7,14 @@ from app.middlewares.logging import LoggingMiddleware
 from app.exceptions import AppException, app_exception_handler, validation_exception_handler
 from app.api.v1 import router as v1_router
 from app.utils.logger import logger
+from app.utils.redis import close_redis
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"{settings.APP_NAME} 启动中...")
     yield
+    await close_redis()
     logger.info(f"{settings.APP_NAME} 关闭中...")
 
 

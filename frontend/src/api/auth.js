@@ -15,3 +15,7 @@ export function refreshToken(data) {
 export function getUserMenus() {
   return request.get('/auth/menus')
 }
+
+export function getCaptcha() {
+  return request.get('/auth/captcha')
+}

@@ -4,7 +4,8 @@ from app.repositories.role_repo import RoleRepository
 from app.repositories.user_repo import UserRepository
 from app.security import verify_password, get_password_hash, create_access_token, create_refresh_token, decode_token
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, RefreshTokenRequest
-from app.exceptions import UnauthorizedException, ConflictException
+from app.exceptions import UnauthorizedException, ConflictException, BadRequestException
+from app.utils.redis import get_redis
 
 
 class AuthService:
@@ -14,6 +15,16 @@ class AuthService:
         self.role_repo = RoleRepository(db)
 
     async def login(self, data: LoginRequest) -> TokenResponse:
+        # 验证验证码
+        rd = await get_redis()
+        cached_code = await rd.get(data.captcha_key)
+        if not cached_code:
+            raise BadRequestException("验证码已过期，请重新获取")
+        # 验证码使用后立即删除，防止重复使用
+        await rd.delete(data.captcha_key)
+        if cached_code.upper() != data.captcha_code.upper():
+            raise BadRequestException("验证码错误")
+
         user = await self.user_repo.get_by_username(data.username)
         if not user or not verify_password(data.password, user.hashed_password):
             raise UnauthorizedException("用户名或密码错误")

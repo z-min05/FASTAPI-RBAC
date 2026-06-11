@@ -9,8 +9,8 @@ export const useAuthStore = defineStore('auth', () => {
   const isLoggedIn = ref(!!accessToken.value)
   const menus = ref([])
 
-  async function login(username, password) {
-    const res = await loginApi({ username, password })
+  async function login(username, password, captchaKey, captchaCode) {
+    const res = await loginApi({ username, password, captcha_key: captchaKey, captcha_code: captchaCode })
     const data = res.data
     accessToken.value = data.access_token
     refreshToken.value = data.refresh_token
