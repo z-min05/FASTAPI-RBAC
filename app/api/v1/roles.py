@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.dependency import get_current_active_user, require_permissions
 from app.models.user import User
-from app.schemas.role import RoleCreate, RoleUpdate, RoleResponse
+from app.schemas.role import RoleCreate, RoleUpdate, RoleResponse, RoleWithPermissionsResponse
 from app.services.role_service import RoleService
 from app.core.pagination import PaginationParams
 from app.core.response import Response
@@ -30,7 +30,7 @@ async def get_role(
 ):
     service = RoleService(db)
     role = await service.get_role(role_id)
-    return Response.success(data=RoleResponse.model_validate(role).model_dump())
+    return Response.success(data=RoleWithPermissionsResponse.model_validate(role).model_dump())
 
 
 @router.post("", summary="创建角色")

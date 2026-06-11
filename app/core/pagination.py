@@ -2,8 +2,9 @@ from typing import TypeVar, Generic, Type, Any
 from math import ceil
 from fastapi import Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, inspect
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import ColumnProperty
 
 T = TypeVar("T")
 
@@ -24,13 +25,43 @@ class PaginationParams:
         return (self.page - 1) * self.page_size
 
 
+def _orm_to_dict(obj):
+    """将 SQLAlchemy ORM 对象转为字典"""
+    if obj is None:
+        return None
+    result = {}
+    mapper = inspect(type(obj))
+    for attr in mapper.mapper.column_attrs:
+        result[attr.key] = getattr(obj, attr.key)
+    return result
+
+
 class PaginatedResponse(BaseModel, Generic[T]):
     """分页响应模型"""
-    items: list[T]
+    items: list[Any]
     total: int
     page: int
     page_size: int
     total_pages: int
+
+    def model_dump(self, **kwargs):
+        """重写 model_dump，将 SQLAlchemy 对象转为字典"""
+        converted_items = []
+        for item in self.items:
+            if isinstance(item, dict):
+                converted_items.append(item)
+            elif hasattr(item, '__tablename__'):
+                converted_items.append(_orm_to_dict(item))
+            else:
+                converted_items.append(item)
+
+        return {
+            "items": converted_items,
+            "total": self.total,
+            "page": self.page,
+            "page_size": self.page_size,
+            "total_pages": self.total_pages,
+        }
 
 
 async def paginate(

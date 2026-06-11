@@ -20,8 +20,8 @@ class AuthService:
         if not user.is_active:
             raise UnauthorizedException("用户已被禁用")
 
-        access_token = create_access_token(data={"sub": user.id})
-        refresh_token = create_refresh_token(data={"sub": user.id})
+        access_token = create_access_token(data={"sub": str(user.id)})
+        refresh_token = create_refresh_token(data={"sub": str(user.id)})
         return TokenResponse(access_token=access_token, refresh_token=refresh_token)
 
     async def register(self, data: RegisterRequest) -> TokenResponse:
@@ -42,8 +42,8 @@ class AuthService:
         if default_role:
             await self.user_repo.set_user_roles(user.id, [default_role.id])
 
-        access_token = create_access_token(data={"sub": user.id})
-        refresh_token = create_refresh_token(data={"sub": user.id})
+        access_token = create_access_token(data={"sub": str(user.id)})
+        refresh_token = create_refresh_token(data={"sub": str(user.id)})
         return TokenResponse(access_token=access_token, refresh_token=refresh_token)
 
     async def refresh_token(self, data: RefreshTokenRequest) -> TokenResponse:
@@ -59,6 +59,6 @@ class AuthService:
         if not user or not user.is_active:
             raise UnauthorizedException("用户不存在或已被禁用")
 
-        access_token = create_access_token(data={"sub": user.id})
-        refresh_token = create_refresh_token(data={"sub": user.id})
+        access_token = create_access_token(data={"sub": str(user.id)})
+        refresh_token = create_refresh_token(data={"sub": str(user.id)})
         return TokenResponse(access_token=access_token, refresh_token=refresh_token)

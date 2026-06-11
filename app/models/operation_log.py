@@ -16,3 +16,4 @@ class OperationLog(BaseModel):
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
     duration: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="耗时(ms)")
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response: Mapped[str | None] = mapped_column(Text, nullable=True, comment="响应内容")

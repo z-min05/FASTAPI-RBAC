@@ -34,4 +34,11 @@ def create_refresh_token(data: dict) -> str:
 
 
 def decode_token(token: str) -> dict:
-    return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    # 将 sub 转回整数（JWT 要求 sub 为字符串，存储时转为了 str）
+    if "sub" in payload and isinstance(payload["sub"], str):
+        try:
+            payload["sub"] = int(payload["sub"])
+        except (ValueError, TypeError):
+            pass
+    return payload

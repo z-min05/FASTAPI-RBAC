@@ -29,6 +29,7 @@ class BaseRepository:
     async def create(self, obj: ModelType) -> ModelType:
         self.db.add(obj)
         await self.db.flush()
+        await self.db.refresh(obj)
         return obj
 
     async def update(self, id: int, data: dict[str, Any]) -> Optional[ModelType]:
@@ -39,6 +40,7 @@ class BaseRepository:
             if value is not None:
                 setattr(obj, key, value)
         await self.db.flush()
+        await self.db.refresh(obj)
         return obj
 
     async def delete(self, id: int) -> bool:

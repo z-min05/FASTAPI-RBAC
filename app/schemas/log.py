@@ -14,6 +14,7 @@ class OperationLogResponse(BaseModel):
     user_agent: str | None
     duration: int | None
     message: str | None
+    response: str | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

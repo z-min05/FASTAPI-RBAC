@@ -6,6 +6,8 @@ from app.security import decode_token
 from app.exceptions import UnauthorizedException, ForbiddenException
 from app.models.user import User
 from app.core.rbac import check_permission
+from app.utils.logger import logger
+from jose import JWTError
 from typing import List
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
@@ -20,13 +22,16 @@ async def get_current_user(
 
     try:
         payload = decode_token(token)
-        if payload.get("type") != "access":
-            raise UnauthorizedException("无效的访问令牌")
-        user_id: int = payload.get("sub")
-        if user_id is None:
-            raise UnauthorizedException("无效的令牌载荷")
-    except Exception:
+    except JWTError as e:
+        logger.error(f"JWT decode error: {e}")
         raise UnauthorizedException("无效或已过期的令牌")
+
+    if payload.get("type") != "access":
+        raise UnauthorizedException("无效的访问令牌")
+
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise UnauthorizedException("无效的令牌载荷")
 
     repo = UserRepository(db)
     user = await repo.get_by_id(user_id)

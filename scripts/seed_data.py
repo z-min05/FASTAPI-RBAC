@@ -40,8 +40,20 @@ async def seed():
             {"name": "更新角色", "code": "role:update", "module": "role", "action": "update"},
             {"name": "删除角色", "code": "role:delete", "module": "role", "action": "delete"},
             {"name": "权限列表", "code": "permission:list", "module": "permission", "action": "list"},
+            {"name": "权限详情", "code": "permission:detail", "module": "permission", "action": "detail"},
+            {"name": "创建权限", "code": "permission:create", "module": "permission", "action": "create"},
+            {"name": "更新权限", "code": "permission:update", "module": "permission", "action": "update"},
+            {"name": "删除权限", "code": "permission:delete", "module": "permission", "action": "delete"},
             {"name": "菜单列表", "code": "menu:list", "module": "menu", "action": "list"},
+            {"name": "菜单详情", "code": "menu:detail", "module": "menu", "action": "detail"},
+            {"name": "创建菜单", "code": "menu:create", "module": "menu", "action": "create"},
+            {"name": "更新菜单", "code": "menu:update", "module": "menu", "action": "update"},
+            {"name": "删除菜单", "code": "menu:delete", "module": "menu", "action": "delete"},
             {"name": "部门列表", "code": "department:list", "module": "department", "action": "list"},
+            {"name": "部门详情", "code": "department:detail", "module": "department", "action": "detail"},
+            {"name": "创建部门", "code": "department:create", "module": "department", "action": "create"},
+            {"name": "更新部门", "code": "department:update", "module": "department", "action": "update"},
+            {"name": "删除部门", "code": "department:delete", "module": "department", "action": "delete"},
             {"name": "日志列表", "code": "log:list", "module": "log", "action": "list"},
         ]
         perms = []
@@ -88,16 +100,57 @@ async def seed():
         root_dept = Department(name="总公司", code="HQ", sort=0, leader="admin")
         db.add(root_dept)
 
-        # 创建默认菜单
-        menus_data = [
-            {"name": "系统管理", "path": "/system", "menu_type": "directory", "sort": 1},
-            {"name": "用户管理", "path": "/system/users", "component": "system/users/index", "menu_type": "menu", "parent_id": None, "sort": 1, "permission": "user:list"},
-            {"name": "角色管理", "path": "/system/roles", "component": "system/roles/index", "menu_type": "menu", "parent_id": None, "sort": 2, "permission": "role:list"},
-            {"name": "权限管理", "path": "/system/permissions", "component": "system/permissions/index", "menu_type": "menu", "parent_id": None, "sort": 3, "permission": "permission:list"},
+        # 创建默认菜单（一级目录 + 二级菜单）
+        # 一级目录：仪表盘
+        dashboard_menu = Menu(
+            name="仪表盘", path="/dashboard", icon="DashboardOutlined",
+            menu_type="menu", sort=0, visible=True
+        )
+        db.add(dashboard_menu)
+        await db.flush()
+
+        # 一级目录：系统管理
+        system_menu = Menu(
+            name="系统管理", path="/system", icon="SettingOutlined",
+            menu_type="directory", sort=1, visible=True
+        )
+        db.add(system_menu)
+        await db.flush()
+
+        # 二级菜单（挂在系统管理下）
+        sub_menus_data = [
+            {"name": "用户管理", "path": "/system/users", "component": "system/users/index",
+             "icon": "UserOutlined", "menu_type": "menu", "parent_id": system_menu.id,
+             "sort": 1, "permission": "user:list"},
+            {"name": "角色管理", "path": "/system/roles", "component": "system/roles/index",
+             "icon": "TeamOutlined", "menu_type": "menu", "parent_id": system_menu.id,
+             "sort": 2, "permission": "role:list"},
+            {"name": "权限管理", "path": "/system/permissions", "component": "system/permissions/index",
+             "icon": "SafetyOutlined", "menu_type": "menu", "parent_id": system_menu.id,
+             "sort": 3, "permission": "permission:list"},
+            {"name": "菜单管理", "path": "/system/menus", "component": "system/menus/index",
+             "icon": "MenuOutlined", "menu_type": "menu", "parent_id": system_menu.id,
+             "sort": 4, "permission": "menu:list"},
+            {"name": "部门管理", "path": "/system/departments", "component": "system/departments/index",
+             "icon": "ApartmentOutlined", "menu_type": "menu", "parent_id": system_menu.id,
+             "sort": 5, "permission": "department:list"},
+            {"name": "操作日志", "path": "/system/logs", "component": "system/logs/index",
+             "icon": "FileTextOutlined", "menu_type": "menu", "parent_id": system_menu.id,
+             "sort": 6, "permission": "log:list"},
         ]
-        for m in menus_data:
+        sub_menus = []
+        for m in sub_menus_data:
             menu = Menu(**m)
             db.add(menu)
+            sub_menus.append(menu)
+        await db.flush()
+
+        # 关联管理员角色与所有菜单
+        all_menu_ids = [dashboard_menu.id, system_menu.id] + [m.id for m in sub_menus]
+        for menu_id in all_menu_ids:
+            await db.execute(
+                role_menus.insert().values(role_id=admin_role.id, menu_id=menu_id)
+            )
 
         await db.commit()
         print("种子数据初始化完成")

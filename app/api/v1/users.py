@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.dependency import get_current_active_user, require_permissions
 from app.models.user import User
-from app.schemas.user import UserCreate, UserUpdate, UserResponse
+from app.schemas.user import UserCreate, UserUpdate, UserResponse, UserWithRolesResponse
 from app.services.user_service import UserService
 from app.core.pagination import PaginationParams, PaginatedResponse
 from app.core.response import Response
@@ -19,7 +19,10 @@ async def get_users(
 ):
     service = UserService(db)
     result = await service.get_users(params)
-    return Response.success(data=result.model_dump())
+    raw = result.model_dump()
+    # 用 UserWithRolesResponse 序列化以包含 roles 关系
+    raw["items"] = [UserWithRolesResponse.model_validate(u).model_dump() for u in result.items]
+    return Response.success(data=raw)
 
 
 @router.get("/{user_id}", summary="获取用户详情")
@@ -30,7 +33,7 @@ async def get_user(
 ):
     service = UserService(db)
     user = await service.get_user(user_id)
-    return Response.success(data=UserResponse.model_validate(user).model_dump())
+    return Response.success(data=UserWithRolesResponse.model_validate(user).model_dump())
 
 
 @router.post("", summary="创建用户")
