@@ -258,20 +258,6 @@ async function initMap() {
     subdomains: '1234', maxZoom: 18, minZoom: 9, opacity: 1
   }).addTo(map)
 
-  try {
-    const resp = await fetch('/map/中华人民共和国.geojson')
-    const geoJson = await resp.json()
-    L.geoJSON(geoJson, {
-      style: { color: cyanColor, weight: 1, opacity: 0.5, fillColor: '#0a2e5c', fillOpacity: 0.3 },
-      onEachFeature: (feature, layer) => {
-        layer.on({
-          mouseover: (e) => { e.target.setStyle({ weight: 2, opacity: 0.9, fillOpacity: 0.5, color: cyanColor }) },
-          mouseout: (e) => { e.target.setStyle({ weight: 1, opacity: 0.5, fillOpacity: 0.3, color: cyanColor }) }
-        })
-      }
-    }).addTo(map)
-  } catch (e) { console.error('GeoJSON 加载失败:', e) }
-
   mockMapPoints.forEach(point => {
     const size = Math.max(point.value / 40, 16)
     const marker = L.marker([point.lat, point.lng], {
