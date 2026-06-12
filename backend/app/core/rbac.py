@@ -1,3 +1,4 @@
+import json
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -7,10 +8,42 @@ from app.models.role_menu import role_menus
 from app.models.permission import Permission
 from app.models.menu import Menu
 from app.models.role import Role
+from app.utils.redis import get_redis
+
+# 缓存过期时间（秒）
+PERM_CACHE_TTL = 300  # 5分钟
+ROLE_CACHE_TTL = 300
+MENU_CACHE_TTL = 300
+
+
+def _perm_cache_key(user_id: int) -> str:
+    return f"rbac:user:{user_id}:permissions"
+
+
+def _role_cache_key(user_id: int) -> str:
+    return f"rbac:user:{user_id}:roles"
+
+
+def _menu_cache_key(user_id: int) -> str:
+    return f"rbac:user:{user_id}:menus"
+
+
+async def invalidate_user_cache(user_id: int) -> None:
+    """清除用户权限/角色/菜单缓存，修改角色或权限时调用"""
+    rd = await get_redis()
+    await rd.delete(_perm_cache_key(user_id), _role_cache_key(user_id), _menu_cache_key(user_id))
 
 
 async def get_user_permissions(db: AsyncSession, user_id: int) -> List[str]:
-    """获取用户所有权限编码列表"""
+    """获取用户所有权限编码列表（带 Redis 缓存）"""
+    rd = await get_redis()
+    cache_key = _perm_cache_key(user_id)
+
+    # 尝试从缓存读取
+    cached = await rd.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
     from app.models.user import User
 
     user_stmt = select(User).where(User.id == user_id)
@@ -19,18 +52,22 @@ async def get_user_permissions(db: AsyncSession, user_id: int) -> List[str]:
     if user and user.is_superuser:
         perm_stmt = select(Permission.code)
         result = await db.execute(perm_stmt)
-        return [row[0] for row in result.all()]
+        perms = [row[0] for row in result.all()]
+    else:
+        stmt = (
+            select(Permission.code)
+            .join(role_permissions, role_permissions.c.permission_id == Permission.id)
+            .join(user_roles, user_roles.c.role_id == role_permissions.c.role_id)
+            .where(user_roles.c.user_id == user_id)
+            .join(Role, Role.id == user_roles.c.role_id)
+            .where(Role.is_active == True)
+        )
+        result = await db.execute(stmt)
+        perms = list(set(row[0] for row in result.all()))
 
-    stmt = (
-        select(Permission.code)
-        .join(role_permissions, role_permissions.c.permission_id == Permission.id)
-        .join(user_roles, user_roles.c.role_id == role_permissions.c.role_id)
-        .where(user_roles.c.user_id == user_id)
-        .join(Role, Role.id == user_roles.c.role_id)
-        .where(Role.is_active == True)
-    )
-    result = await db.execute(stmt)
-    return list(set(row[0] for row in result.all()))
+    # 写入缓存
+    await rd.set(cache_key, json.dumps(perms), ex=PERM_CACHE_TTL)
+    return perms
 
 
 async def check_permission(db: AsyncSession, user_id: int, required_permissions: List[str]) -> bool:
@@ -40,7 +77,14 @@ async def check_permission(db: AsyncSession, user_id: int, required_permissions:
 
 
 async def get_user_roles(db: AsyncSession, user_id: int) -> List[str]:
-    """获取用户所有角色编码列表"""
+    """获取用户所有角色编码列表（带 Redis 缓存）"""
+    rd = await get_redis()
+    cache_key = _role_cache_key(user_id)
+
+    cached = await rd.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
     stmt = (
         select(Role.code)
         .join(user_roles, user_roles.c.role_id == Role.id)
@@ -48,11 +92,21 @@ async def get_user_roles(db: AsyncSession, user_id: int) -> List[str]:
         .where(Role.is_active == True)
     )
     result = await db.execute(stmt)
-    return [row[0] for row in result.all()]
+    roles = [row[0] for row in result.all()]
+
+    await rd.set(cache_key, json.dumps(roles), ex=ROLE_CACHE_TTL)
+    return roles
 
 
 async def get_user_menus(db: AsyncSession, user_id: int) -> list[dict]:
-    """获取用户可见的菜单列表（扁平），已排序，自动补全父目录"""
+    """获取用户可见的菜单列表（带 Redis 缓存）"""
+    rd = await get_redis()
+    cache_key = _menu_cache_key(user_id)
+
+    cached = await rd.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
     from app.models.user import User
 
     user_stmt = select(User).where(User.id == user_id)
@@ -88,7 +142,7 @@ async def get_user_menus(db: AsyncSession, user_id: int) -> list[dict]:
             menus.extend(parent_result.scalars().all())
             menus.sort(key=lambda m: m.sort)
 
-    return [
+    menus_data = [
         {
             "id": m.id, "name": m.name, "path": m.path, "component": m.component,
             "icon": m.icon, "menu_type": m.menu_type, "parent_id": m.parent_id,
@@ -96,3 +150,6 @@ async def get_user_menus(db: AsyncSession, user_id: int) -> list[dict]:
         }
         for m in menus
     ]
+
+    await rd.set(cache_key, json.dumps(menus_data, ensure_ascii=False), ex=MENU_CACHE_TTL)
+    return menus_data

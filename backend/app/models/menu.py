@@ -16,4 +16,4 @@ class Menu(BaseModel):
     visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     permission: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
-    roles = relationship("Role", secondary="role_menus", back_populates="menus", lazy="selectin")
+    roles = relationship("Role", secondary="role_menus", back_populates="menus", lazy="noload")

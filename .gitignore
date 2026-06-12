@@ -80,6 +80,7 @@ docker-compose.override.yml
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/public/map/tiles/
 
 # Alembic
 alembic/versions/__pycache__/

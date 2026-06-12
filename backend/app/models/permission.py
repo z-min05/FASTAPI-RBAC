@@ -13,5 +13,5 @@ class Permission(BaseModel):
     action: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     roles = relationship(
-        "Role", secondary="role_permissions", back_populates="permissions", lazy="selectin"
+        "Role", secondary="role_permissions", back_populates="permissions", lazy="noload"
     )

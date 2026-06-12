@@ -23,8 +23,8 @@ class BaseRepository:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_paginated(self, params: PaginationParams, filters: list | None = None) -> PaginatedResponse:
-        return await paginate(self.db, self.model, params, filters)
+    async def get_paginated(self, params: PaginationParams, filters: list | None = None, options: list | None = None) -> PaginatedResponse:
+        return await paginate(self.db, self.model, params, filters, options)
 
     async def create(self, obj: ModelType) -> ModelType:
         self.db.add(obj)

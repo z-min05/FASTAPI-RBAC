@@ -8,6 +8,12 @@ const routes = [
     meta: { title: '登录', requiresAuth: false }
   },
   {
+    path: '/bigscreen',
+    name: 'BigScreen',
+    component: () => import('@/pages/BigScreen.vue'),
+    meta: { title: '数据大屏', requiresAuth: true }
+  },
+  {
     path: '/',
     component: () => import('@/layouts/MainLayout.vue'),
     redirect: '/dashboard',

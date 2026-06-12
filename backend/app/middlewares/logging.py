@@ -35,9 +35,8 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api"):
             return response
 
-        # 获取用户信息
+        # 从 JWT 获取用户 ID（不再查数据库获取用户名）
         user_id = None
-        username = None
         auth_header = request.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
@@ -45,16 +44,6 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 payload = decode_token(token)
                 if payload.get("type") == "access":
                     user_id = payload.get("sub")
-                    if user_id:
-                        try:
-                            from app.repositories.user_repo import UserRepository
-                            async with AsyncSessionLocal() as db:
-                                repo = UserRepository(db)
-                                user = await repo.get_by_id(int(user_id))
-                                if user:
-                                    username = user.username
-                        except Exception:
-                            pass
             except JWTError:
                 pass
 
@@ -100,7 +89,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 async with AsyncSessionLocal() as db:
                     log_entry = OperationLog(
                         user_id=int(user_id) if user_id else None,
-                        username=username,
+                        username=None,
                         method=request.method,
                         path=path,
                         params=body,

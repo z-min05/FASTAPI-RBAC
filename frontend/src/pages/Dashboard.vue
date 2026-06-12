@@ -1,5 +1,6 @@
 <template>
   <div class="dashboard">
+    <!-- 统计卡片 -->
     <a-row :gutter="[24, 24]">
       <a-col :span="6">
         <a-card class="stat-card" :bordered="false">
@@ -47,6 +48,34 @@
       </a-col>
     </a-row>
 
+    <!-- 图表区域 -->
+    <a-row :gutter="[24, 24]" style="margin-top: 24px">
+      <a-col :span="12">
+        <a-card title="用户访问趋势" :bordered="false">
+          <div ref="lineChartRef" style="height: 350px"></div>
+        </a-card>
+      </a-col>
+      <a-col :span="12">
+        <a-card title="角色权限分布" :bordered="false">
+          <div ref="pieChartRef" style="height: 350px"></div>
+        </a-card>
+      </a-col>
+    </a-row>
+
+    <a-row :gutter="[24, 24]" style="margin-top: 24px">
+      <a-col :span="12">
+        <a-card title="各部门人数统计" :bordered="false">
+          <div ref="barChartRef" style="height: 350px"></div>
+        </a-card>
+      </a-col>
+      <a-col :span="12">
+        <a-card title="操作类型统计" :bordered="false">
+          <div ref="radarChartRef" style="height: 350px"></div>
+        </a-card>
+      </a-col>
+    </a-row>
+
+    <!-- 下方区域 -->
     <a-row :gutter="24" style="margin-top: 24px">
       <a-col :span="16">
         <a-card title="系统信息" :bordered="false">
@@ -83,12 +112,13 @@
 </template>
 
 <script setup>
-import { reactive, onMounted } from 'vue'
+import { reactive, ref, onMounted, onBeforeUnmount } from 'vue'
 import { UserOutlined, TeamOutlined, SafetyOutlined, ApartmentOutlined, FileTextOutlined } from '@ant-design/icons-vue'
 import { getUsers } from '@/api/user'
 import { getRoles } from '@/api/role'
 import { getPermissions } from '@/api/permission'
 import { getDepartments } from '@/api/department'
+import * as echarts from 'echarts'
 
 const stats = reactive({
   userCount: 0,
@@ -97,7 +127,155 @@ const stats = reactive({
   deptCount: 0
 })
 
+const lineChartRef = ref(null)
+const pieChartRef = ref(null)
+const barChartRef = ref(null)
+const radarChartRef = ref(null)
+
+let lineChart = null
+let pieChart = null
+let barChart = null
+let radarChart = null
+
+// Mock 数据
+const mockLineData = {
+  dates: ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'],
+  visits: [820, 932, 901, 1234, 1290, 1330, 1520, 1430, 1650, 1890, 2100, 2340],
+  activeUsers: [420, 532, 501, 734, 790, 830, 920, 830, 950, 1090, 1200, 1340]
+}
+
+const mockPieData = [
+  { value: 35, name: '用户管理' },
+  { value: 25, name: '角色管理' },
+  { value: 20, name: '菜单管理' },
+  { value: 15, name: '系统配置' },
+  { value: 5, name: '其他' }
+]
+
+const mockBarData = {
+  departments: ['技术部', '产品部', '运营部', '市场部', '人事部', '财务部'],
+  counts: [42, 28, 35, 22, 15, 12]
+}
+
+const mockRadarData = {
+  indicators: [
+    { name: '查询', max: 100 },
+    { name: '新增', max: 100 },
+    { name: '修改', max: 100 },
+    { name: '删除', max: 100 },
+    { name: '导出', max: 100 },
+    { name: '登录', max: 100 }
+  ],
+  values: [85, 60, 70, 30, 45, 90]
+}
+
+function initLineChart() {
+  lineChart = echarts.init(lineChartRef.value)
+  lineChart.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['访问量', '活跃用户'], bottom: 0 },
+    grid: { left: '3%', right: '4%', bottom: '12%', top: '8%', containLabel: true },
+    xAxis: { type: 'category', data: mockLineData.dates, boundaryGap: false },
+    yAxis: { type: 'value' },
+    series: [
+      {
+        name: '访问量',
+        type: 'line',
+        smooth: true,
+        data: mockLineData.visits,
+        areaStyle: { opacity: 0.15 },
+        itemStyle: { color: '#1677ff' }
+      },
+      {
+        name: '活跃用户',
+        type: 'line',
+        smooth: true,
+        data: mockLineData.activeUsers,
+        areaStyle: { opacity: 0.15 },
+        itemStyle: { color: '#52c41a' }
+      }
+    ]
+  })
+}
+
+function initPieChart() {
+  pieChart = echarts.init(pieChartRef.value)
+  pieChart.setOption({
+    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+    legend: { orient: 'vertical', right: '5%', top: 'center' },
+    series: [
+      {
+        type: 'pie',
+        radius: ['40%', '70%'],
+        center: ['40%', '50%'],
+        avoidLabelOverlap: false,
+        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+        label: { show: false },
+        emphasis: { label: { show: true, fontSize: 14, fontWeight: 'bold' } },
+        data: mockPieData
+      }
+    ]
+  })
+}
+
+function initBarChart() {
+  barChart = echarts.init(barChartRef.value)
+  barChart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: '3%', right: '4%', bottom: '3%', top: '8%', containLabel: true },
+    xAxis: { type: 'category', data: mockBarData.departments },
+    yAxis: { type: 'value' },
+    series: [
+      {
+        type: 'bar',
+        data: mockBarData.counts,
+        barWidth: '45%',
+        itemStyle: {
+          borderRadius: [4, 4, 0, 0],
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: '#1677ff' },
+            { offset: 1, color: '#69b1ff' }
+          ])
+        }
+      }
+    ]
+  })
+}
+
+function initRadarChart() {
+  radarChart = echarts.init(radarChartRef.value)
+  radarChart.setOption({
+    tooltip: {},
+    radar: {
+      indicator: mockRadarData.indicators,
+      radius: '65%'
+    },
+    series: [
+      {
+        type: 'radar',
+        data: [
+          {
+            value: mockRadarData.values,
+            name: '操作统计',
+            areaStyle: { opacity: 0.2 },
+            lineStyle: { color: '#1677ff' },
+            itemStyle: { color: '#1677ff' }
+          }
+        ]
+      }
+    ]
+  })
+}
+
+function handleResize() {
+  lineChart?.resize()
+  pieChart?.resize()
+  barChart?.resize()
+  radarChart?.resize()
+}
+
 onMounted(async () => {
+  // 加载统计卡片数据
   try {
     const [users, roles, perms, depts] = await Promise.all([
       getUsers({ page: 1, page_size: 1 }),
@@ -112,6 +290,22 @@ onMounted(async () => {
   } catch (e) {
     // 静默处理
   }
+
+  // 初始化图表
+  initLineChart()
+  initPieChart()
+  initBarChart()
+  initRadarChart()
+
+  window.addEventListener('resize', handleResize)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+  lineChart?.dispose()
+  pieChart?.dispose()
+  barChart?.dispose()
+  radarChart?.dispose()
 })
 </script>
 

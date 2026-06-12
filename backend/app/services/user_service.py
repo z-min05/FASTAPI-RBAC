@@ -4,6 +4,7 @@ from app.models.user import User
 from app.security import get_password_hash
 from app.schemas.user import UserCreate, UserUpdate
 from app.core.pagination import PaginationParams, PaginatedResponse
+from app.core.rbac import invalidate_user_cache
 from app.exceptions import NotFoundException, ConflictException
 
 
@@ -13,7 +14,7 @@ class UserService:
         self.user_repo = UserRepository(db)
 
     async def get_user(self, user_id: int) -> User:
-        user = await self.user_repo.get_by_id(user_id)
+        user = await self.user_repo.get_by_id(user_id, load_roles=True)
         if not user:
             raise NotFoundException("用户不存在")
         return user
@@ -40,7 +41,7 @@ class UserService:
         if data.role_ids:
             await self.user_repo.set_user_roles(user.id, data.role_ids)
 
-        return await self.user_repo.get_by_id(user.id)
+        return await self.user_repo.get_by_id(user.id, load_roles=True)
 
     async def update_user(self, user_id: int, data: UserUpdate) -> User:
         update_data = data.model_dump(exclude_unset=True, exclude={"role_ids"})
@@ -50,12 +51,14 @@ class UserService:
 
         if data.role_ids is not None:
             await self.user_repo.set_user_roles(user_id, data.role_ids)
+            await invalidate_user_cache(user_id)
 
-        return await self.user_repo.get_by_id(user_id)
+        return await self.user_repo.get_by_id(user_id, load_roles=True)
 
     async def delete_user(self, user_id: int) -> None:
         if not await self.user_repo.delete(user_id):
             raise NotFoundException("用户不存在")
+        await invalidate_user_cache(user_id)
 
     async def reset_password(self, user_id: int, new_password: str) -> None:
         user = await self.user_repo.get_by_id(user_id)

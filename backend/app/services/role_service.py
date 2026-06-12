@@ -1,8 +1,11 @@
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from app.repositories.role_repo import RoleRepository
 from app.models.role import Role
+from app.models.user_role import user_roles
 from app.schemas.role import RoleCreate, RoleUpdate
 from app.core.pagination import PaginationParams, PaginatedResponse
+from app.core.rbac import invalidate_user_cache
 from app.exceptions import NotFoundException, ConflictException
 
 
@@ -46,13 +49,26 @@ class RoleService:
         if not role:
             raise NotFoundException("角色不存在")
 
+        need_invalidate = data.permission_ids is not None or data.menu_ids is not None
         if data.permission_ids is not None:
             await self.role_repo.set_role_permissions(role_id, data.permission_ids)
         if data.menu_ids is not None:
             await self.role_repo.set_role_menus(role_id, data.menu_ids)
+
+        if need_invalidate:
+            await self._invalidate_role_users(role_id)
 
         return await self.role_repo.get_by_id(role_id)
 
     async def delete_role(self, role_id: int) -> None:
         if not await self.role_repo.delete(role_id):
             raise NotFoundException("角色不存在")
+        await self._invalidate_role_users(role_id)
+
+    async def _invalidate_role_users(self, role_id: int) -> None:
+        """清除该角色下所有用户的缓存"""
+        stmt = select(user_roles.c.user_id).where(user_roles.c.role_id == role_id)
+        result = await self.db.execute(stmt)
+        user_ids = [row[0] for row in result.all()]
+        for uid in user_ids:
+            await invalidate_user_cache(uid)

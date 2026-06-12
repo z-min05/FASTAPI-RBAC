@@ -1,13 +1,25 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from app.models.user import User
 from app.models.user_role import user_roles
 from app.repositories.base import BaseRepository
+from app.core.pagination import PaginationParams, PaginatedResponse
 
 
 class UserRepository(BaseRepository):
     def __init__(self, db: AsyncSession):
         super().__init__(User, db)
+
+    async def get_by_id(self, id: int, load_roles: bool = False) -> User | None:
+        stmt = select(User).where(User.id == id)
+        if load_roles:
+            stmt = stmt.options(selectinload(User.roles)).execution_options(populate_existing=True)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_paginated(self, params: PaginationParams, filters: list | None = None, options: list | None = None) -> PaginatedResponse:
+        return await super().get_paginated(params, filters, [selectinload(User.roles)])
 
     async def get_by_username(self, username: str) -> User | None:
         stmt = select(User).where(User.username == username)

@@ -1,5 +1,6 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from app.models.role import Role
 from app.models.user_role import user_roles
 from app.models.role_permission import role_permissions
@@ -10,6 +11,16 @@ from app.repositories.base import BaseRepository
 class RoleRepository(BaseRepository):
     def __init__(self, db: AsyncSession):
         super().__init__(Role, db)
+
+    async def get_by_id(self, id: int) -> Role | None:
+        stmt = (
+            select(Role)
+            .where(Role.id == id)
+            .options(selectinload(Role.permissions), selectinload(Role.menus))
+            .execution_options(populate_existing=True)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def get_by_code(self, code: str) -> Role | None:
         stmt = select(Role).where(Role.code == code)

@@ -26,6 +26,7 @@
 | 密码 | bcrypt (passlib) | 1.7+ |
 | 迁移 | Alembic | 1.14+ |
 | 校验 | Pydantic | 2.10+ |
+| 图片 | Pillow | 11.1+ |
 | 容器 | Docker / Docker Compose | - |
 
 ## 📁 项目结构

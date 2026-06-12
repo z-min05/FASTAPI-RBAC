@@ -16,4 +16,4 @@ class User(BaseModel):
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     department_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    roles = relationship("Role", secondary="user_roles", back_populates="users", lazy="selectin")
+    roles = relationship("Role", secondary="user_roles", back_populates="users", lazy="noload")

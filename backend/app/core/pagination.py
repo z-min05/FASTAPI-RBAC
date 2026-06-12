@@ -69,6 +69,7 @@ async def paginate(
     model: Type[Any],
     params: PaginationParams,
     filters: list | None = None,
+    options: list | None = None,
 ) -> PaginatedResponse:
     """通用分页查询"""
     # 计算总数
@@ -81,6 +82,8 @@ async def paginate(
 
     # 查询数据
     stmt = select(model)
+    if options:
+        stmt = stmt.options(*options).execution_options(populate_existing=True)
     if filters:
         for f in filters:
             stmt = stmt.where(f)

@@ -65,6 +65,11 @@
           </a-breadcrumb>
         </div>
         <div class="header-right">
+          <a-tooltip title="数据大屏">
+            <a class="bigscreen-btn" @click="$router.push('/bigscreen')">
+              <FundOutlined style="font-size: 18px" />
+            </a>
+          </a-tooltip>
           <a-dropdown>
             <a class="user-info" @click.prevent>
               <a-avatar :size="28" style="background-color: #1677ff">
@@ -114,7 +119,8 @@ import {
   KeyOutlined,
   OrderedListOutlined,
   PartitionOutlined,
-  FileSearchOutlined
+  FileSearchOutlined,
+  FundOutlined
 } from '@ant-design/icons-vue'
 
 const router = useRouter()
@@ -238,6 +244,23 @@ onMounted(async () => {
 .header-right {
   display: flex;
   align-items: center;
+  gap: 12px;
+}
+
+.bigscreen-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  color: rgba(0, 0, 0, 0.65);
+  transition: all 0.3s;
+}
+
+.bigscreen-btn:hover {
+  background: rgba(22, 119, 255, 0.08);
+  color: #1677ff;
 }
 
 .user-info {
