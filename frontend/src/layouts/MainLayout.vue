@@ -70,6 +70,11 @@
               <FundOutlined style="font-size: 18px" />
             </a>
           </a-tooltip>
+          <a-tooltip title="智慧园区大屏">
+            <a class="bigscreen-btn" @click="$router.push('/smartpark')">
+              <BuildOutlined style="font-size: 18px" />
+            </a>
+          </a-tooltip>
           <a-dropdown>
             <a class="user-info" @click.prevent>
               <a-avatar :size="28" style="background-color: #1677ff">
@@ -120,7 +125,8 @@ import {
   OrderedListOutlined,
   PartitionOutlined,
   FileSearchOutlined,
-  FundOutlined
+  FundOutlined,
+  BuildOutlined
 } from '@ant-design/icons-vue'
 
 const router = useRouter()
