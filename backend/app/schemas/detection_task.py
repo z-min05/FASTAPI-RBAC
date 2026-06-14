@@ -7,6 +7,7 @@ class DetectionTaskBase(BaseModel):
     camera_id: int = Field(..., description="摄像头ID")
     model_id: int = Field(..., description="YOLO模型ID")
     target_classes: str = Field(..., description="目标识别类别JSON数组")
+    confidence: float = Field(default=0.5, ge=0.01, le=1.0, description="置信度阈值")
     interval_seconds: int = Field(default=30, ge=5, le=3600, description="识别间隔(秒)")
 
 
@@ -19,6 +20,7 @@ class DetectionTaskUpdate(BaseModel):
     camera_id: int | None = None
     model_id: int | None = None
     target_classes: str | None = None
+    confidence: float | None = Field(None, ge=0.01, le=1.0)
     interval_seconds: int | None = Field(None, ge=5, le=3600)
     is_active: bool | None = None
 

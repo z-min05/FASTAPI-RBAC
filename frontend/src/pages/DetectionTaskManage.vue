@@ -27,6 +27,9 @@
         <template v-if="column.key === 'target_classes'">
           <a-tag v-for="(cls, i) in parseClasses(record.target_classes)" :key="i" color="orange">{{ cls }}</a-tag>
         </template>
+        <template v-if="column.key === 'confidence'">
+          {{ (record.confidence * 100).toFixed(0) }}%
+        </template>
         <template v-if="column.key === 'is_active'">
           <a-badge :status="record.is_active ? 'processing' : 'default'" :text="record.is_active ? '运行中' : '已停止'" />
         </template>
@@ -78,6 +81,9 @@
           <a-textarea v-model:value="formState.target_classes" placeholder='如 ["person","car"]' :rows="3" />
           <div style="font-size:12px;color:#999;margin-top:4px">JSON数组格式，为空则识别所有类别</div>
         </a-form-item>
+        <a-form-item label="置信度阈值">
+          <a-slider v-model:value="formState.confidence" :min="0.01" :max="1" :step="0.01" :marks="{ 0.25: '25%', 0.5: '50%', 0.75: '75%', 1: '100%' }" />
+        </a-form-item>
         <a-form-item label="识别间隔(秒)" required>
           <a-input-number v-model:value="formState.interval_seconds" :min="5" :max="3600" style="width: 100%" />
         </a-form-item>
@@ -114,6 +120,7 @@ const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
   { title: '名称', dataIndex: 'name', key: 'name', width: 140 },
   { title: '目标类别', key: 'target_classes', width: 180 },
+  { title: '置信度', key: 'confidence', width: 80 },
   { title: '间隔(秒)', dataIndex: 'interval_seconds', key: 'interval_seconds', width: 90 },
   { title: '状态', key: 'is_active', width: 100 },
   { title: '上次执行', key: 'last_run_at', width: 170 },
@@ -134,6 +141,7 @@ const formState = reactive({
   camera_id: null,
   model_id: null,
   target_classes: '',
+  confidence: 0.5,
   interval_seconds: 30
 })
 
@@ -195,6 +203,7 @@ function showModal(record) {
       camera_id: record.camera_id,
       model_id: record.model_id,
       target_classes: record.target_classes,
+      confidence: record.confidence || 0.5,
       interval_seconds: record.interval_seconds
     })
   } else {
@@ -204,6 +213,7 @@ function showModal(record) {
       camera_id: null,
       model_id: null,
       target_classes: '',
+      confidence: 0.5,
       interval_seconds: 30
     })
   }

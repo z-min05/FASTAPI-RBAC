@@ -201,7 +201,7 @@ class DetectionTaskService:
         target_classes = json.loads(task.target_classes)
         try:
             result_data = await asyncio.to_thread(
-                _run_yolo_inference, model.file_path, snapshot_path, target_classes
+                _run_yolo_inference, model.file_path, snapshot_path, target_classes, task.confidence
             )
         except Exception as e:
             logger.error(f"任务{task.id} YOLO识别失败: {e}")
@@ -242,8 +242,9 @@ class DetectionTaskService:
         return result
 
 
-def _run_yolo_inference(model_path: str, image_path: str, target_classes: list[str]):
+def _run_yolo_inference(model_path: str, image_path: str, target_classes: list[str], confidence: float = 0.5):
     """同步执行YOLO推理（在子线程中运行）"""
+    import cv2
     from ultralytics import YOLO
     model = YOLO(model_path)
     results = model(image_path)
@@ -252,20 +253,28 @@ def _run_yolo_inference(model_path: str, image_path: str, target_classes: list[s
     annotated_image = None
 
     for r in results:
-        if annotated_image is None:
-            annotated_image = r.plot()  # numpy BGR array
+        # 读取原图用于手动画框
+        img = cv2.imread(image_path)
         for box in r.boxes:
             cls_id = int(box.cls[0])
             cls_name = r.names[cls_id]
-            confidence = float(box.conf[0])
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-            # 只保留目标类别
-            if not target_classes or cls_name in target_classes:
+            conf = float(box.conf[0])
+            # 只保留目标类别且置信度达标
+            if (not target_classes or cls_name in target_classes) and conf >= confidence:
+                x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
                 detections.append({
                     "class": cls_name,
-                    "confidence": round(confidence, 3),
+                    "confidence": round(conf, 3),
                     "bbox": [round(v, 1) for v in [x1, y1, x2, y2]]
                 })
+                # 只画目标类别的框
+                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                label = f"{cls_name} {conf:.0%}"
+                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+                cv2.rectangle(img, (x1, y1 - th - 6), (x1 + tw, y1), (0, 0, 255), -1)
+                cv2.putText(img, label, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        if detections:
+            annotated_image = img  # BGR numpy array
 
     return {
         "detections": detections,
