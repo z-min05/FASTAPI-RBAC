@@ -55,6 +55,16 @@ async def seed():
             {"name": "更新部门", "code": "department:update", "module": "department", "action": "update"},
             {"name": "删除部门", "code": "department:delete", "module": "department", "action": "delete"},
             {"name": "日志列表", "code": "log:list", "module": "log", "action": "list"},
+            # 摄像头模块权限
+            {"name": "摄像头列表", "code": "camera:list", "module": "camera", "action": "list"},
+            {"name": "摄像头详情", "code": "camera:detail", "module": "camera", "action": "detail"},
+            {"name": "创建摄像头", "code": "camera:create", "module": "camera", "action": "create"},
+            {"name": "更新摄像头", "code": "camera:update", "module": "camera", "action": "update"},
+            {"name": "删除摄像头", "code": "camera:delete", "module": "camera", "action": "delete"},
+            {"name": "摄像头连接", "code": "camera:connect", "module": "camera", "action": "connect"},
+            {"name": "云台控制", "code": "camera:ptz", "module": "camera", "action": "ptz"},
+            {"name": "摄像头抓图", "code": "camera:snapshot", "module": "camera", "action": "snapshot"},
+            {"name": "视频流管理", "code": "camera:stream", "module": "camera", "action": "stream"},
         ]
         perms = []
         for p in permissions_data:
@@ -145,8 +155,29 @@ async def seed():
             sub_menus.append(menu)
         await db.flush()
 
+        # 一级目录：设备管理
+        device_menu = Menu(
+            name="设备管理", path="/device", icon="DesktopOutlined",
+            menu_type="directory", sort=2, visible=True
+        )
+        db.add(device_menu)
+        await db.flush()
+
+        # 二级菜单（挂在设备管理下）
+        device_sub_menus_data = [
+            {"name": "摄像头管理", "path": "/device/cameras", "component": "device/cameras/index",
+             "icon": "VideoCameraOutlined", "menu_type": "menu", "parent_id": device_menu.id,
+             "sort": 1, "permission": "camera:list"},
+        ]
+        device_sub_menus = []
+        for m in device_sub_menus_data:
+            menu = Menu(**m)
+            db.add(menu)
+            device_sub_menus.append(menu)
+        await db.flush()
+
         # 关联管理员角色与所有菜单
-        all_menu_ids = [dashboard_menu.id, system_menu.id] + [m.id for m in sub_menus]
+        all_menu_ids = [dashboard_menu.id, system_menu.id] + [m.id for m in sub_menus] + [device_menu.id] + [m.id for m in device_sub_menus]
         for menu_id in all_menu_ids:
             await db.execute(
                 role_menus.insert().values(role_id=admin_role.id, menu_id=menu_id)

@@ -226,16 +226,17 @@ const mockLogPool = [
 
 const logList = ref([])
 
-// ---- 创建脉冲标记图标 ----
-function createPulseIcon(size, color) {
+// ---- 创建标记图标 ----
+function createMarkerIcon(color) {
   return L.divIcon({
-    className: 'pulse-marker',
-    html: `<div class="pulse-dot" style="--size:${size}px; --color:${color}">
-             <div class="pulse-ring"></div>
-             <div class="pulse-core"></div>
-           </div>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2]
+    className: 'map-marker',
+    html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" width="28" height="42">
+             <path d="M12 0C5.4 0 0 5.4 0 12c0 9 12 24 12 24s12-15 12-24C24 5.4 18.6 0 12 0z" fill="${color}" opacity="0.9"/>
+             <circle cx="12" cy="12" r="5" fill="#fff" opacity="0.9"/>
+           </svg>`,
+    iconSize: [28, 42],
+    iconAnchor: [14, 42],
+    tooltipAnchor: [0, -42]
   })
 }
 
@@ -259,39 +260,18 @@ async function initMap() {
   }).addTo(map)
 
   mockMapPoints.forEach(point => {
-    const size = Math.max(point.value / 40, 16)
+    const color = point.value > 800 ? cyanColor : greenColor
     const marker = L.marker([point.lat, point.lng], {
-      icon: createPulseIcon(size, point.value > 800 ? cyanColor : greenColor)
+      icon: createMarkerIcon(color)
     }).addTo(map)
     marker.bindTooltip(
       `<div style="text-align:center;font-size:13px;color:#00e5ff">
         <div style="font-weight:bold;margin-bottom:2px">${point.name}</div>
         <div>访问量: <span style="color:#fff">${point.value}</span></div>
       </div>`,
-      { className: 'custom-tooltip', direction: 'top', offset: [0, -size / 2] }
+      { className: 'custom-tooltip', direction: 'top' }
     )
   })
-
-  mockMapPoints.filter(p => p.name !== '北京').forEach(point => {
-    const beijing = mockMapPoints[0]
-    L.polyline([[beijing.lat, beijing.lng], [point.lat, point.lng]], {
-      color: cyanColor, weight: 1, opacity: 0.3, dashArray: '4 8'
-    }).addTo(map)
-    const movingDot = L.circleMarker([beijing.lat, beijing.lng], {
-      radius: 3, color: cyanColor, fillColor: cyanColor, fillOpacity: 1, weight: 0
-    }).addTo(map)
-    animateDot(movingDot, [beijing.lat, beijing.lng], [point.lat, point.lng], 4000)
-  })
-}
-
-function animateDot(dot, start, end, duration) {
-  const startTime = performance.now()
-  function step(now) {
-    const progress = ((now - startTime) % duration) / duration
-    dot.setLatLng([start[0] + (end[0] - start[0]) * progress, start[1] + (end[1] - start[1]) * progress])
-    requestAnimationFrame(step)
-  }
-  requestAnimationFrame(step)
 }
 
 // ---- ECharts ----
@@ -422,24 +402,7 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 12px rgba(0,228,255,0.2);
 }
 .map-bg :deep(.custom-tooltip .leaflet-tooltip-tip) { border-top-color: rgba(0,20,40,0.9) !important; }
-.map-bg :deep(.pulse-marker) { background: none !important; border: none !important; }
-
-.pulse-dot { position: relative; width: var(--size); height: var(--size); }
-.pulse-core {
-  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--color); box-shadow: 0 0 8px var(--color);
-}
-.pulse-ring {
-  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: var(--size); height: var(--size); border-radius: 50%;
-  border: 2px solid var(--color);
-  animation: pulse-expand 2s ease-out infinite;
-}
-@keyframes pulse-expand {
-  0% { transform: translate(-50%,-50%) scale(0.5); opacity: 1; }
-  100% { transform: translate(-50%,-50%) scale(1.2); opacity: 0; }
-}
+.map-bg :deep(.map-marker) { background: none !important; border: none !important; }
 
 /* ---- 顶部标题 ---- */
 .screen-header {

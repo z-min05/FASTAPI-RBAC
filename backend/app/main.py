@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.middlewares.cors import add_cors_middleware
 from app.middlewares.logging import LoggingMiddleware
@@ -8,12 +9,19 @@ from app.exceptions import AppException, app_exception_handler, validation_excep
 from app.api.v1 import router as v1_router
 from app.utils.logger import logger
 from app.utils.redis import close_redis
+import os
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"{settings.APP_NAME} 启动中...")
+    # 确保目录存在
+    os.makedirs(os.path.join(os.getcwd(), "snapshots"), exist_ok=True)
+    os.makedirs(os.path.join(os.getcwd(), "streams"), exist_ok=True)
     yield
+    # 停止所有视频流
+    from app.utils.stream_manager import stream_manager
+    stream_manager.stop_all()
     await close_redis()
     logger.info(f"{settings.APP_NAME} 关闭中...")
 

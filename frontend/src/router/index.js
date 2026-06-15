@@ -14,6 +14,12 @@ const routes = [
     meta: { title: '数据大屏', requiresAuth: true }
   },
   {
+    path: '/smartpark',
+    name: 'SmartPark',
+    component: () => import('@/pages/SmartPark.vue'),
+    meta: { title: '智慧园区', requiresAuth: true }
+  },
+  {
     path: '/',
     component: () => import('@/layouts/MainLayout.vue'),
     redirect: '/dashboard',
@@ -60,6 +66,36 @@ const routes = [
         name: 'LogManage',
         component: () => import('@/pages/LogManage.vue'),
         meta: { title: '操作日志', icon: 'FileTextOutlined' }
+      },
+      {
+        path: 'device/cameras',
+        name: 'CameraManage',
+        component: () => import('@/pages/CameraManage.vue'),
+        meta: { title: '摄像头管理', icon: 'VideoCameraOutlined' }
+      },
+      {
+        path: 'device/cameras/live/:id',
+        name: 'CameraLive',
+        component: () => import('@/pages/CameraLive.vue'),
+        meta: { title: '摄像头监控', icon: 'VideoCameraOutlined' }
+      },
+      {
+        path: 'device/yolo',
+        name: 'YoloModelManage',
+        component: () => import('@/pages/YoloModelManage.vue'),
+        meta: { title: 'YOLO识别', icon: 'ScanOutlined' }
+      },
+      {
+        path: 'device/yolo/tasks',
+        name: 'DetectionTaskManage',
+        component: () => import('@/pages/DetectionTaskManage.vue'),
+        meta: { title: '识别任务', icon: 'AimOutlined' }
+      },
+      {
+        path: 'device/yolo/results/:taskId',
+        name: 'DetectionResultView',
+        component: () => import('@/pages/DetectionResultView.vue'),
+        meta: { title: '识别结果', icon: 'EyeOutlined' }
       }
     ]
   }

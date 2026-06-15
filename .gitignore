@@ -81,6 +81,10 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/public/map/tiles/
+backend/detection_results/
+backend/snapshots/
+backend/yolo_models/
+backend/streams/
 
 # Alembic
 alembic/versions/__pycache__/
