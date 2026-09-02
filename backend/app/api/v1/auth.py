@@ -7,7 +7,7 @@ from app.db.session import get_db
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, RefreshTokenRequest, CaptchaResponse
 from app.services.auth_service import AuthService
 from app.core.response import Response
-from app.core.rbac import get_user_menus
+from app.core.casbin_service import get_user_menus, get_user_button_permissions, get_user_api_permissions
 from app.core.pagination import PaginationParams
 from app.dependency import get_current_active_user
 from app.models.user import User
@@ -60,3 +60,28 @@ async def get_menus(
     menus = await get_user_menus(db, current_user.id)
     tree = build_tree(menus, parent_key="parent_id")
     return Response.success(data=tree)
+
+
+@router.get("/me", summary="获取当前用户信息和权限")
+async def get_me(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """返回当前用户信息、菜单、API 权限和按钮权限"""
+    menus = await get_user_menus(db, current_user.id)
+    api_perms = await get_user_api_permissions(current_user.id)
+    button_perms = await get_user_button_permissions(current_user.id)
+    return Response.success(data={
+        "user": {
+            "id": current_user.id,
+            "username": current_user.username,
+            "nickname": current_user.nickname,
+            "email": current_user.email,
+            "phone": current_user.phone,
+            "avatar": current_user.avatar,
+            "is_superuser": current_user.is_superuser,
+        },
+        "menus": build_tree(menus, parent_key="parent_id"),
+        "api_permissions": api_perms,
+        "button_permissions": button_perms,
+    })

@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 const routes = [
   {
@@ -6,18 +7,6 @@ const routes = [
     name: 'Login',
     component: () => import('@/pages/Login.vue'),
     meta: { title: '登录', requiresAuth: false }
-  },
-  {
-    path: '/bigscreen',
-    name: 'BigScreen',
-    component: () => import('@/pages/BigScreen.vue'),
-    meta: { title: '数据大屏', requiresAuth: true }
-  },
-  {
-    path: '/smartpark',
-    name: 'SmartPark',
-    component: () => import('@/pages/SmartPark.vue'),
-    meta: { title: '智慧园区', requiresAuth: true }
   },
   {
     path: '/',
@@ -68,34 +57,46 @@ const routes = [
         meta: { title: '操作日志', icon: 'FileTextOutlined' }
       },
       {
-        path: 'device/cameras',
-        name: 'CameraManage',
-        component: () => import('@/pages/CameraManage.vue'),
-        meta: { title: '摄像头管理', icon: 'VideoCameraOutlined' }
+        path: 'test/projects',
+        name: 'ProjectManage',
+        component: () => import('@/pages/test/ProjectManage.vue'),
+        meta: { title: '项目管理', icon: 'FolderOutlined' }
       },
       {
-        path: 'device/cameras/live/:id',
-        name: 'CameraLive',
-        component: () => import('@/pages/CameraLive.vue'),
-        meta: { title: '摄像头监控', icon: 'VideoCameraOutlined' }
+        path: 'test/testcases',
+        name: 'TestcaseManage',
+        component: () => import('@/pages/test/TestcaseManage.vue'),
+        meta: { title: '用例管理', icon: 'FileTextOutlined' }
       },
       {
-        path: 'device/yolo',
-        name: 'YoloModelManage',
-        component: () => import('@/pages/YoloModelManage.vue'),
-        meta: { title: 'YOLO识别', icon: 'ScanOutlined' }
+        path: 'agent/chat',
+        name: 'AgentChat',
+        component: () => import('@/pages/agent/Chat.vue'),
+        meta: { title: 'Agent 对话', icon: 'MessageOutlined' }
       },
       {
-        path: 'device/yolo/tasks',
-        name: 'DetectionTaskManage',
-        component: () => import('@/pages/DetectionTaskManage.vue'),
-        meta: { title: '识别任务', icon: 'AimOutlined' }
+        path: 'agent/manage',
+        name: 'AgentManage',
+        component: () => import('@/pages/agent/AgentManage.vue'),
+        meta: { title: '我的 Agent', icon: 'AppstoreOutlined' }
       },
       {
-        path: 'device/yolo/results/:taskId',
-        name: 'DetectionResultView',
-        component: () => import('@/pages/DetectionResultView.vue'),
-        meta: { title: '识别结果', icon: 'EyeOutlined' }
+        path: 'agent/llms',
+        name: 'LlmManage',
+        component: () => import('@/pages/agent/LlmManage.vue'),
+        meta: { title: 'LLM 配置', icon: 'ApiOutlined' }
+      },
+      {
+        path: 'agent/token-stats',
+        name: 'AgentTokenStats',
+        component: () => import('@/pages/agent/TokenStats.vue'),
+        meta: { title: 'Token 统计' }
+      },
+      {
+        path: 'profile',
+        name: 'Profile',
+        component: () => import('@/pages/Profile.vue'),
+        meta: { title: '个人中心', icon: 'UserOutlined' }
       }
     ]
   }
@@ -106,15 +107,21 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to) => {
   const token = localStorage.getItem('access_token')
+  const authStore = useAuthStore()
   if (to.meta.requiresAuth !== false && !token) {
-    next('/login')
-  } else if (to.path === '/login' && token) {
-    next('/')
-  } else {
-    next()
+    return '/login'
   }
+  if (to.path === '/login' && token) {
+    return '/'
+  }
+  // 有 token 但用户信息（菜单/按钮权限）未加载时，先加载完成再进入页面，
+  // 避免 v-permission 在权限就绪前挂载导致按钮被误移除
+  if (token && !authStore.userLoaded) {
+    await authStore.fetchUserInfo()
+  }
+  return true
 })
 
 export default router

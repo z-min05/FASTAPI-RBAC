@@ -3,6 +3,7 @@ from app.repositories.menu_repo import MenuRepository
 from app.models.menu import Menu
 from app.schemas.menu import MenuCreate, MenuUpdate, MenuTreeResponse
 from app.core.pagination import PaginationParams, PaginatedResponse
+from app.core.casbin_service import invalidate_policy
 from app.exceptions import NotFoundException, ConflictException
 from app.utils.helpers import build_tree
 
@@ -35,15 +36,19 @@ class MenuService:
 
     async def create_menu(self, data: MenuCreate) -> Menu:
         menu = Menu(**data.model_dump())
-        return await self.menu_repo.create(menu)
+        result = await self.menu_repo.create(menu)
+        await invalidate_policy(self.db)
+        return result
 
     async def update_menu(self, menu_id: int, data: MenuUpdate) -> Menu:
         update_data = data.model_dump(exclude_unset=True)
         menu = await self.menu_repo.update(menu_id, update_data)
         if not menu:
             raise NotFoundException("菜单不存在")
+        await invalidate_policy(self.db)
         return menu
 
     async def delete_menu(self, menu_id: int) -> None:
         if not await self.menu_repo.delete(menu_id):
             raise NotFoundException("菜单不存在")
+        await invalidate_policy(self.db)

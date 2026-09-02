@@ -2,7 +2,7 @@
   <div>
     <div class="page-header">
       <a-space>
-        <a-button type="primary" @click="showModal()">
+        <a-button type="primary" @click="showModal()" v-permission="'menu:create'">
           <PlusOutlined /> 新增菜单
         </a-button>
       </a-space>
@@ -33,10 +33,10 @@
         </template>
         <template v-if="column.key === 'action'">
           <a-space>
-            <a-button type="link" size="small" @click="showModal(record)">编辑</a-button>
-            <a-button type="link" size="small" @click="showModal(null, record.id)">新增子菜单</a-button>
+            <a-button type="link" size="small" @click="showModal(record)" v-permission="'menu:update'">编辑</a-button>
+            <a-button type="link" size="small" @click="showModal(null, record.id)" v-permission="'menu:create'">新增子菜单</a-button>
             <a-popconfirm title="确定删除该菜单？" @confirm="handleDelete(record.id)">
-              <a-button type="link" size="small" danger>删除</a-button>
+              <a-button type="link" size="small" danger v-permission="'menu:delete'">删除</a-button>
             </a-popconfirm>
           </a-space>
         </template>

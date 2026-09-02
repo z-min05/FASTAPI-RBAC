@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     LOG_FILE_MAX_BYTES: int = 10 * 1024 * 1024  # 10MB
     LOG_FILE_BACKUP_COUNT: int = 5
 
+    # ==================== Agent（AI 助手） ====================
+    # V2：LLM/Agent 全部平台化入库管理，不再使用 AGENT_LLM_* 等 env 配置；
+    # 仅保留总开关与单轮推理超时。
+    AGENT_ENABLED: bool = False
+    AGENT_INVOKE_TIMEOUT: int = 180
+
     @property
     def cors_origins_list(self) -> List[str]:
         return json.loads(self.CORS_ORIGINS)

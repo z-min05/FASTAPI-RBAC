@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.user import User
 from app.repositories.role_repo import RoleRepository
 from app.repositories.user_repo import UserRepository
 from app.security import verify_password, get_password_hash, create_access_token, create_refresh_token, decode_token
@@ -41,13 +42,13 @@ class AuthService:
         if await self.user_repo.get_by_email(data.email):
             raise ConflictException("邮箱已存在")
         user = await self.user_repo.create(
-            type("UserObj", (), {
-                "username": data.username,
-                "email": data.email,
-                "hashed_password": get_password_hash(data.password),
-                "nickname": data.nickname,
-                "phone": data.phone,
-            })()
+            User(
+                username=data.username,
+                email=data.email,
+                hashed_password=get_password_hash(data.password),
+                nickname=data.nickname,
+                phone=data.phone,
+            )
         )
         default_role = await self.role_repo.get_by_code("user")
         if default_role:

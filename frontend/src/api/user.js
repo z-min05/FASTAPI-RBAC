@@ -19,3 +19,7 @@ export function updateUser(id, data) {
 export function deleteUser(id) {
   return request.delete(`/users/${id}`)
 }
+
+export function changePassword(id, data) {
+  return request.put(`/users/${id}/password`, data)
+}

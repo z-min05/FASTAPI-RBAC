@@ -5,4 +5,4 @@ from app.repositories.permission_repo import PermissionRepository
 from app.repositories.menu_repo import MenuRepository
 from app.repositories.department_repo import DepartmentRepository
 from app.repositories.log_repo import LogRepository
-from app.repositories.camera_repo import CameraRepository
+

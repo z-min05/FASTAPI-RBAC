@@ -9,7 +9,7 @@
           @search="loadData"
           allow-clear
         />
-        <a-button type="primary" @click="showModal()">
+        <a-button type="primary" @click="showModal()" v-permission="'permission:create'">
           <PlusOutlined /> 新增权限
         </a-button>
       </a-space>
@@ -40,9 +40,9 @@
         </template>
         <template v-if="column.key === 'action'">
           <a-space>
-            <a-button type="link" size="small" @click="showModal(record)">编辑</a-button>
+            <a-button type="link" size="small" @click="showModal(record)" v-permission="'permission:update'">编辑</a-button>
             <a-popconfirm title="确定删除该权限？" @confirm="handleDelete(record.id)">
-              <a-button type="link" size="small" danger>删除</a-button>
+              <a-button type="link" size="small" danger v-permission="'permission:delete'">删除</a-button>
             </a-popconfirm>
           </a-space>
         </template>

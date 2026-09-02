@@ -16,6 +16,10 @@ export function getUserMenus() {
   return request.get('/auth/menus')
 }
 
+export function getUserInfo() {
+  return request.get('/auth/me')
+}
+
 export function getCaptcha() {
   return request.get('/auth/captcha')
 }

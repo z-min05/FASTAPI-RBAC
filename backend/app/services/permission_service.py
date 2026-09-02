@@ -3,6 +3,7 @@ from app.repositories.permission_repo import PermissionRepository
 from app.models.permission import Permission
 from app.schemas.permission import PermissionCreate, PermissionUpdate
 from app.core.pagination import PaginationParams, PaginatedResponse
+from app.core.casbin_service import invalidate_policy
 from app.exceptions import NotFoundException, ConflictException
 
 
@@ -24,15 +25,19 @@ class PermissionService:
         if await self.perm_repo.get_by_code(data.code):
             raise ConflictException("权限编码已存在")
         perm = Permission(**data.model_dump())
-        return await self.perm_repo.create(perm)
+        result = await self.perm_repo.create(perm)
+        await invalidate_policy(self.db)
+        return result
 
     async def update_permission(self, perm_id: int, data: PermissionUpdate) -> Permission:
         update_data = data.model_dump(exclude_unset=True)
         perm = await self.perm_repo.update(perm_id, update_data)
         if not perm:
             raise NotFoundException("权限不存在")
+        await invalidate_policy(self.db)
         return perm
 
     async def delete_permission(self, perm_id: int) -> None:
         if not await self.perm_repo.delete(perm_id):
             raise NotFoundException("权限不存在")
+        await invalidate_policy(self.db)

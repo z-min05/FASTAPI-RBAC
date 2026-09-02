@@ -5,7 +5,7 @@ from app.models.role import Role
 from app.models.user_role import user_roles
 from app.schemas.role import RoleCreate, RoleUpdate
 from app.core.pagination import PaginationParams, PaginatedResponse
-from app.core.rbac import invalidate_user_cache
+from app.core.casbin_service import invalidate_policy
 from app.exceptions import NotFoundException, ConflictException
 
 
@@ -66,9 +66,5 @@ class RoleService:
         await self._invalidate_role_users(role_id)
 
     async def _invalidate_role_users(self, role_id: int) -> None:
-        """清除该角色下所有用户的缓存"""
-        stmt = select(user_roles.c.user_id).where(user_roles.c.role_id == role_id)
-        result = await self.db.execute(stmt)
-        user_ids = [row[0] for row in result.all()]
-        for uid in user_ids:
-            await invalidate_user_cache(uid)
+        """清除该角色下所有用户的 Casbin 策略缓存"""
+        await invalidate_policy(self.db)

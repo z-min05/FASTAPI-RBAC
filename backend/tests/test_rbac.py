@@ -1,5 +1,5 @@
 import pytest
-from app.core.rbac import check_permission, get_user_permissions, get_user_roles
+from app.core.rbac import check_permission, get_user_permissions
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,7 @@
           @search="loadData"
           allow-clear
         />
-        <a-button type="primary" @click="showModal()">
+        <a-button type="primary" @click="showModal()" v-permission="'user:create'">
           <PlusOutlined /> 新增用户
         </a-button>
       </a-space>
@@ -41,9 +41,9 @@
         </template>
         <template v-if="column.key === 'action'">
           <a-space>
-            <a-button type="link" size="small" @click="showModal(record)">编辑</a-button>
+            <a-button type="link" size="small" @click="showModal(record)" v-permission="'user:update'">编辑</a-button>
             <a-popconfirm title="确定删除该用户？" @confirm="handleDelete(record.id)">
-              <a-button type="link" size="small" danger>删除</a-button>
+              <a-button type="link" size="small" danger v-permission="'user:delete'">删除</a-button>
             </a-popconfirm>
           </a-space>
         </template>

@@ -9,7 +9,7 @@
           @search="loadData"
           allow-clear
         />
-        <a-button type="primary" @click="showModal()">
+        <a-button type="primary" @click="showModal()" v-permission="'role:create'">
           <PlusOutlined /> 新增角色
         </a-button>
       </a-space>
@@ -34,9 +34,9 @@
         </template>
         <template v-if="column.key === 'action'">
           <a-space>
-            <a-button type="link" size="small" @click="showModal(record)">编辑</a-button>
+            <a-button type="link" size="small" @click="showModal(record)" v-permission="'role:update'">编辑</a-button>
             <a-popconfirm title="确定删除该角色？" @confirm="handleDelete(record.id)">
-              <a-button type="link" size="small" danger>删除</a-button>
+              <a-button type="link" size="small" danger v-permission="'role:delete'">删除</a-button>
             </a-popconfirm>
           </a-space>
         </template>
@@ -72,16 +72,14 @@
             :loading="permsLoading"
           />
         </a-form-item>
-        <a-form-item label="菜单">
-          <a-tree-select
-            v-model:value="formState.menu_ids"
-            multiple
-            placeholder="请选择菜单"
+        <a-form-item label="菜单权限">
+          <a-tree
+            v-model:checkedKeys="menuCheckedKeys"
             :tree-data="menuTreeData"
-            tree-checkable
-            allow-clear
-            :field-names="{ label: 'name', value: 'id', children: 'children' }"
-            style="width: 100%"
+            checkable
+            check-strictly
+            :field-names="{ title: 'name', key: 'id', children: 'children' }"
+            style="max-height: 360px; overflow-y: auto; border: 1px solid #d9d9d9; border-radius: 6px; padding: 8px;"
           />
         </a-form-item>
         <a-form-item label="状态" v-if="isEdit">
@@ -140,6 +138,9 @@ const formState = reactive({
   permission_ids: [],
   menu_ids: []
 })
+
+// a-tree check-strictly 下 checkedKeys 是数组
+const menuCheckedKeys = ref([])
 
 function formatDate(val) {
   return val ? dayjs(val).format('YYYY-MM-DD HH:mm:ss') : '-'
@@ -200,7 +201,7 @@ function showModal(record) {
       permission_ids: [],
       menu_ids: []
     })
-    // 异步加载角色详情（含权限和菜单）
+    menuCheckedKeys.value = []
     loadRoleDetail(record.id)
   } else {
     editId.value = null
@@ -213,6 +214,7 @@ function showModal(record) {
       permission_ids: [],
       menu_ids: []
     })
+    menuCheckedKeys.value = []
   }
   modalVisible.value = true
 }
@@ -222,7 +224,8 @@ async function loadRoleDetail(roleId) {
     const res = await getRole(roleId)
     const detail = res.data
     formState.permission_ids = detail.permissions?.map(p => p.id) || []
-    formState.menu_ids = detail.menus?.map(m => m.id) || []
+    const menuIds = detail.menus?.map(m => m.id) || []
+    menuCheckedKeys.value = menuIds
   } catch (e) {
     // 静默处理
   }
@@ -231,11 +234,19 @@ async function loadRoleDetail(roleId) {
 async function handleSubmit() {
   submitLoading.value = true
   try {
+    // menuCheckedKeys 可能是 { checked: [], halfChecked: [] } 或数组
+    const checkedIds = Array.isArray(menuCheckedKeys.value)
+      ? menuCheckedKeys.value
+      : menuCheckedKeys.value.checked || []
+    const payload = {
+      ...formState,
+      menu_ids: checkedIds
+    }
     if (isEdit.value) {
-      await updateRole(editId.value, formState)
+      await updateRole(editId.value, payload)
       message.success('更新成功')
     } else {
-      await createRole(formState)
+      await createRole(payload)
       message.success('创建成功')
     }
     modalVisible.value = false

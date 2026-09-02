@@ -65,25 +65,32 @@
           </a-breadcrumb>
         </div>
         <div class="header-right">
-          <a-tooltip title="数据大屏">
-            <a class="bigscreen-btn" @click="$router.push('/bigscreen')">
-              <FundOutlined style="font-size: 18px" />
-            </a>
-          </a-tooltip>
-          <a-tooltip title="智慧园区大屏">
-            <a class="bigscreen-btn" @click="$router.push('/smartpark')">
-              <BuildOutlined style="font-size: 18px" />
-            </a>
-          </a-tooltip>
           <a-dropdown>
             <a class="user-info" @click.prevent>
               <a-avatar :size="28" style="background-color: #1677ff">
                 <template #icon><UserOutlined /></template>
               </a-avatar>
-              <span class="username">Admin</span>
+              <span class="username">{{ authStore.userInfo?.nickname || authStore.userInfo?.username || 'Admin' }}</span>
             </a>
             <template #overlay>
               <a-menu>
+                <a-menu-item @click="$router.push('/profile')">
+                  <UserOutlined />
+                  个人中心
+                </a-menu-item>
+                <a-menu-item @click="$router.push('/agent/manage')">
+                  <RobotOutlined />
+                  我的 Agent
+                </a-menu-item>
+                <a-menu-item @click="$router.push('/agent/chat')">
+                  <MessageOutlined />
+                  Agent 对话
+                </a-menu-item>
+                <a-menu-item @click="$router.push('/agent/token-stats')">
+                  <FundOutlined />
+                  Token 统计
+                </a-menu-item>
+                <a-menu-divider />
                 <a-menu-item @click="authStore.logout">
                   <LogoutOutlined />
                   退出登录
@@ -126,7 +133,11 @@ import {
   PartitionOutlined,
   FileSearchOutlined,
   FundOutlined,
-  BuildOutlined
+  BuildOutlined,
+  FolderOutlined,
+  RobotOutlined,
+  MessageOutlined,
+  ApiOutlined
 } from '@ant-design/icons-vue'
 
 const router = useRouter()
@@ -150,7 +161,11 @@ const iconMap = {
   KeyOutlined,
   OrderedListOutlined,
   PartitionOutlined,
-  FileSearchOutlined
+  FileSearchOutlined,
+  FolderOutlined,
+  RobotOutlined,
+  MessageOutlined,
+  ApiOutlined
 }
 
 const currentRoute = computed(() => route)
@@ -162,27 +177,33 @@ const menuList = computed(() => {
   return (authStore.menus || []).filter(m => m.menu_type !== 'button')
 })
 
-// 计算需要展开的目录 key
-function collectOpenKeys(menus) {
-  const keys = []
+// 计算当前路由所在目录需要展开的 key
+function findParentKeys(menus, targetPath) {
   for (const menu of menus) {
     if (menu.children && menu.children.length) {
-      keys.push(String(menu.id))
+      for (const child of menu.children) {
+        if (child.path === targetPath) {
+          return [String(menu.id)]
+        }
+      }
+      const found = findParentKeys(menu.children, targetPath)
+      if (found.length) return [String(menu.id), ...found]
     }
+    if (menu.path === targetPath) return []
   }
-  return keys
+  return []
 }
 
 watch(
   () => route.path,
   (path) => {
     selectedKeys.value = [path]
-    openKeys.value = collectOpenKeys(menuList.value)
+    openKeys.value = findParentKeys(menuList.value, path)
   }
 )
 
 watch(menuList, () => {
-  openKeys.value = collectOpenKeys(menuList.value)
+  openKeys.value = findParentKeys(menuList.value, route.path)
 }, { immediate: true })
 
 function onMenuClick({ key }) {
@@ -193,7 +214,7 @@ function onMenuClick({ key }) {
 
 onMounted(async () => {
   if (authStore.isLoggedIn && authStore.menus.length === 0) {
-    await authStore.fetchMenus()
+    await authStore.fetchUserInfo()
   }
 })
 </script>

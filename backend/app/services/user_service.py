@@ -4,7 +4,7 @@ from app.models.user import User
 from app.security import get_password_hash
 from app.schemas.user import UserCreate, UserUpdate
 from app.core.pagination import PaginationParams, PaginatedResponse
-from app.core.rbac import invalidate_user_cache
+from app.core.casbin_service import invalidate_policy
 from app.exceptions import NotFoundException, ConflictException
 
 
@@ -51,14 +51,39 @@ class UserService:
 
         if data.role_ids is not None:
             await self.user_repo.set_user_roles(user_id, data.role_ids)
-            await invalidate_user_cache(user_id)
+            # 根据角色自动同步 is_superuser 标记
+            await self._sync_superuser_flag(user_id, data.role_ids)
+            await invalidate_policy(self.db)
 
         return await self.user_repo.get_by_id(user_id, load_roles=True)
+
+    async def _sync_superuser_flag(self, user_id: int, role_ids: list[int]) -> None:
+        """根据角色列表自动同步 is_superuser 标记"""
+        from app.models.role import Role
+        from sqlalchemy import select
+
+        if not role_ids:
+            user = await self.user_repo.get_by_id(user_id)
+            if user and user.is_superuser:
+                user.is_superuser = False
+                await self.db.flush()
+            return
+
+        stmt = select(Role).where(Role.id.in_(role_ids))
+        result = await self.db.execute(stmt)
+        roles = result.scalars().all()
+
+        # 拥有 admin 角色则 is_superuser=True，否则 False
+        is_superuser = any(r.code == "admin" for r in roles)
+        user = await self.user_repo.get_by_id(user_id)
+        if user and user.is_superuser != is_superuser:
+            user.is_superuser = is_superuser
+            await self.db.flush()
 
     async def delete_user(self, user_id: int) -> None:
         if not await self.user_repo.delete(user_id):
             raise NotFoundException("用户不存在")
-        await invalidate_user_cache(user_id)
+        await invalidate_policy(self.db)
 
     async def reset_password(self, user_id: int, new_password: str) -> None:
         user = await self.user_repo.get_by_id(user_id)

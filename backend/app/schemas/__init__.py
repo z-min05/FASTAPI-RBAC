@@ -6,4 +6,6 @@ from app.schemas.menu import *
 from app.schemas.department import *
 from app.schemas.log import *
 from app.schemas.common import *
-from app.schemas.camera import *
+from app.schemas.project import *
+from app.schemas.testcase import *
+from app.schemas.agent import *
