@@ -47,3 +47,11 @@ export function updatePlanTestcaseResult(planId, ptcId, data) {
 export function removePlanTestcase(planId, ptcId) {
   return request.delete(`/plans/${planId}/testcases/${ptcId}`)
 }
+
+export function executePlanTestcase(planId, ptcId) {
+  return request.post(`/plans/${planId}/testcases/${ptcId}/execute`)
+}
+
+export function batchExecutePlanTestcases(planId, ptcIds) {
+  return request.post(`/plans/${planId}/testcases/batch-execute`, { ptc_ids: ptcIds })
+}

@@ -41,7 +41,8 @@ TEST_PERMISSIONS = [
     {"name": "删除测试计划", "code": "plan:delete", "module": "plan", "action": "delete"},
     {"name": "计划用例列表", "code": "plan:case:list", "module": "plan", "action": "case:list"},
     {"name": "添加计划用例", "code": "plan:case:add", "module": "plan", "action": "case:add"},
-    {"name": "记录测试结果", "code": "plan:case:result", "module": "plan", "action": "case:result"},
+    {"name": "记录结果", "code": "plan:case:result", "module": "plan", "action": "case:result"},
+    {"name": "执行自动化用例", "code": "plan:case:execute", "module": "plan", "action": "case:execute"},
     {"name": "移除计划用例", "code": "plan:case:remove", "module": "plan", "action": "case:remove"},
 ]
 
@@ -82,7 +83,8 @@ TEST_MENUS = [
                     {"name": "删除计划", "menu_type": "button", "permission": "plan:delete", "sort": 3},
                     {"name": "添加用例", "menu_type": "button", "permission": "plan:case:add", "sort": 4},
                     {"name": "记录结果", "menu_type": "button", "permission": "plan:case:result", "sort": 5},
-                    {"name": "移除用例", "menu_type": "button", "permission": "plan:case:remove", "sort": 6},
+                    {"name": "执行用例", "menu_type": "button", "permission": "plan:case:execute", "sort": 6},
+                    {"name": "移除用例", "menu_type": "button", "permission": "plan:case:remove", "sort": 7},
                 ],
             },
         ],
@@ -130,7 +132,9 @@ async def _ensure_test_module(db):
             for btn_def in menu_def.get("children", []):
                 result = await db.execute(
                     select(Menu).where(
-                        Menu.permission == btn_def["permission"], Menu.menu_type == "button"
+                        Menu.name == btn_def["name"],
+                        Menu.parent_id == menu.id,
+                        Menu.menu_type == "button",
                     )
                 )
                 btn = result.scalar_one_or_none()
@@ -141,6 +145,8 @@ async def _ensure_test_module(db):
                     )
                     db.add(btn)
                     await db.flush()
+                elif btn.permission != btn_def["permission"]:
+                    btn.permission = btn_def["permission"]
                 module_menus.append(btn)
 
     # 3. 角色授权（admin 全部；user 只读 list 权限 + 非按钮菜单）
@@ -281,7 +287,9 @@ async def _ensure_agent_module(db):
             for btn_def in menu_def.get("children", []):
                 result = await db.execute(
                     select(Menu).where(
-                        Menu.permission == btn_def["permission"], Menu.menu_type == "button"
+                        Menu.name == btn_def["name"],
+                        Menu.parent_id == menu.id,
+                        Menu.menu_type == "button",
                     )
                 )
                 btn = result.scalar_one_or_none()
@@ -292,6 +300,8 @@ async def _ensure_agent_module(db):
                     )
                     db.add(btn)
                     await db.flush()
+                elif btn.permission != btn_def["permission"]:
+                    btn.permission = btn_def["permission"]
                 module_menus.append(btn)
 
     # 3. 清理旧菜单：Agent 对话(/agent/chat)、我的 Agent(/agent/manage)、旧按钮

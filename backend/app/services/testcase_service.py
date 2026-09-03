@@ -4,7 +4,7 @@ import io
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.testcase_repo import TestCaseRepository
@@ -20,12 +20,18 @@ from app.schemas.testcase import (
     ALLOWED_CASE_TYPES,
 )
 from app.core.pagination import PaginationParams, PaginatedResponse
-from app.exceptions import NotFoundException, BadRequestException
+from app.exceptions import NotFoundException, BadRequestException, ConflictException
+from app.services.auto_file_service import (
+    validate_codes,
+    validate_root_path,
+    generate_automation_file,
+)
 
 # CSV 列定义（导入导出共用）
 CSV_COLUMNS = [
     "项目编码", "标题", "模块", "优先级", "类型", "来源",
     "前置条件", "步骤", "预期结果", "状态", "标签",
+    "模块编码", "用例编码",
 ]
 
 # 必填列
@@ -137,6 +143,8 @@ class TestCaseService:
             expected_result=tc.expected_result,
             status=tc.status,
             tags=tc.tags,
+            module_code=tc.module_code,
+            case_code=tc.case_code,
             created_at=tc.created_at,
             updated_at=tc.updated_at,
         ).model_dump()
@@ -147,9 +155,14 @@ class TestCaseService:
     # ---------- 写操作 ----------
 
     async def create_testcase(self, data: TestCaseCreate) -> TestCase:
-        await self._ensure_project_active(data.project_id)
+        project = await self._ensure_project_active(data.project_id)
+        validate_codes(data.module_code, data.case_code)
+        await self._check_uniqueness(data.project_id, data.module_code, data.case_code)
         tc = TestCase(**data.model_dump())
-        return await self.testcase_repo.create(tc)
+        created = await self.testcase_repo.create(tc)
+        # 尝试生成自动化文件
+        await self._generate_auto_file(project, created)
+        return created
 
     async def update_testcase(self, testcase_id: int, data: TestCaseUpdate) -> TestCase:
         tc = await self.testcase_repo.get_by_id(testcase_id)
@@ -157,17 +170,62 @@ class TestCaseService:
             raise NotFoundException("用例不存在")
         update_data = data.model_dump(exclude_unset=True)
         new_project_id = update_data.get("project_id")
+        new_module_code = update_data.get("module_code", tc.module_code)
+        new_case_code = update_data.get("case_code", tc.case_code)
+        project = None
         if new_project_id is not None and new_project_id != tc.project_id:
-            await self._ensure_project_active(new_project_id)
+            project = await self._ensure_project_active(new_project_id)
+        else:
+            project = await self.project_repo.get_by_id(new_project_id or tc.project_id)
+        # 校验格式与唯一性
+        if "module_code" in update_data or "case_code" in update_data:
+            validate_codes(new_module_code, new_case_code)
+            await self._check_uniqueness(
+                new_project_id or tc.project_id,
+                new_module_code,
+                new_case_code,
+                exclude_id=tc.id,
+            )
         updated = await self.testcase_repo.update(testcase_id, update_data)
+        # 尝试生成自动化文件（用更新后的值）
+        if project and updated.module_code and updated.case_code:
+            await self._generate_auto_file(project, updated)
         return updated
 
-    async def _ensure_project_active(self, project_id: int) -> None:
+    async def _ensure_project_active(self, project_id: int) -> Project:
         project = await self.project_repo.get_by_id(project_id)
         if not project:
             raise BadRequestException("项目不存在")
         if not project.is_active:
             raise BadRequestException("项目已停用，不能在该项目下操作用例")
+        return project
+
+    async def _check_uniqueness(self, project_id: int, module_code: str | None, case_code: str | None, exclude_id: int | None = None) -> None:
+        """校验同一项目下 (module_code, case_code) 组合唯一"""
+        if not module_code or not case_code:
+            return
+        filters = [
+            TestCase.project_id == project_id,
+            TestCase.module_code == module_code,
+            TestCase.case_code == case_code,
+        ]
+        if exclude_id is not None:
+            filters.append(TestCase.id != exclude_id)
+        stmt = select(TestCase.id).where(and_(*filters)).limit(1)
+        result = (await self.db.execute(stmt)).scalar()
+        if result is not None:
+            raise ConflictException(
+                f"该项目下已存在相同模块编码+用例编码的组合（模块编码: {module_code}，用例编码: {case_code}）"
+            )
+
+    async def _generate_auto_file(self, project: Project, tc: TestCase) -> dict:
+        """尝试生成自动化文件，返回 {generated: bool,  message: str}"""
+        if not (project.auto_root_path and tc.module_code and tc.case_code):
+            return {"generated": False, "message": ""}
+        ok, msg = generate_automation_file(project.auto_root_path, tc)
+        if not ok:
+            return {"generated": False, "message": f"自动化文件生成失败: {msg}"}
+        return {"generated": True, "message": msg}
 
     async def delete_testcase(self, testcase_id: int) -> None:
         refs = await self.plan_tc_repo.count_by_testcase(testcase_id)
@@ -208,10 +266,11 @@ class TestCaseService:
             "DEMO", "示例用例-登录功能", "login", "P1", "function", "需求文档",
             "已注册测试账号", "1. 打开登录页\n2. 输入账号密码\n3. 点击登录",
             "登录成功并跳转首页", "reviewed", "冒烟,登录",
+            "test_login", "test_login_success",
         ])
 
         for col, width in {"A": 12, "B": 20, "C": 12, "D": 10, "E": 10, "F": 12,
-                           "G": 14, "H": 30, "I": 22, "J": 10, "K": 14}.items():
+                           "G": 14, "H": 30, "I": 22, "J": 10, "K": 14, "L": 16, "M": 18}.items():
             ws.column_dimensions[col].width = width
 
         buf = io.BytesIO()
@@ -254,6 +313,8 @@ class TestCaseService:
                 tc.expected_result,
                 tc.status,
                 tc.tags or "",
+                tc.module_code or "",
+                tc.case_code or "",
             ])
         return buf.getvalue()
 
@@ -333,11 +394,21 @@ class TestCaseService:
             if status not in ALLOWED_STATUS:
                 errors.append(f"状态不合法: {status}")
 
+            module_code = record.get("模块编码", "").strip() or None
+            case_code = record.get("用例编码", "").strip() or None
+
+            try:
+                validate_codes(module_code, case_code)
+                if module_code and case_code:
+                    await self._check_uniqueness(project.id, module_code, case_code)
+            except BadRequestException as e:
+                errors.append(str(e))
+
             if errors:
                 failures.append({"line": idx, "errors": errors})
                 continue
 
-            self.db.add(TestCase(
+            tc = TestCase(
                 project_id=project.id,
                 title=record["标题"],
                 module=record["模块"],
@@ -349,7 +420,16 @@ class TestCaseService:
                 expected_result=record["预期结果"],
                 status=status,
                 tags=record["标签"] or None,
-            ))
+                module_code=module_code,
+                case_code=case_code,
+            )
+            self.db.add(tc)
+            # 生成文件不影响入库，只记录生成信息
+            if project.auto_root_path and module_code and case_code:
+                result = await self._generate_auto_file(project, tc)
+                if not result["generated"]:
+                    # 生成失败但入库成功，记录警告
+                    errors.append(result["message"])
             success += 1
 
         await self.db.flush()

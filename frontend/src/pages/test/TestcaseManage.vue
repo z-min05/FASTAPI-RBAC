@@ -105,6 +105,8 @@
         <a-descriptions-item label="前置条件" :span="2"><span style="white-space: pre-wrap">{{ detail.precondition || '-' }}</span></a-descriptions-item>
         <a-descriptions-item label="测试步骤" :span="2"><span style="white-space: pre-wrap">{{ detail.steps || '-' }}</span></a-descriptions-item>
         <a-descriptions-item label="预期结果" :span="2"><span style="white-space: pre-wrap">{{ detail.expected_result }}</span></a-descriptions-item>
+        <a-descriptions-item label="模块编码">{{ detail.module_code || '-' }}</a-descriptions-item>
+        <a-descriptions-item label="用例编码">{{ detail.case_code || '-' }}</a-descriptions-item>
       </a-descriptions>
     </a-modal>
 
@@ -186,6 +188,13 @@
         </a-form-item>
         <a-form-item label="标签">
           <a-input v-model:value="formState.tags" placeholder="逗号分隔的覆盖点关键词" />
+        </a-form-item>
+        <a-divider>自动化生成（可选）</a-divider>
+        <a-form-item label="模块编码">
+          <a-input v-model:value="formState.module_code" placeholder="pytest 文件名，如 test_device_comm_log（需以 test_ 开头）" />
+        </a-form-item>
+        <a-form-item label="用例编码">
+          <a-input v-model:value="formState.case_code" placeholder="pytest 函数名，如 test_list_columns（需以 test_ 开头）" />
         </a-form-item>
       </a-form>
       <div class="drawer-footer">
@@ -298,7 +307,9 @@ const formState = reactive({
   steps: '',
   expected_result: '',
   status: 'draft',
-  tags: ''
+  tags: '',
+  module_code: '',
+  case_code: ''
 })
 
 function priorityColor(p) {
@@ -433,7 +444,9 @@ function showForm(record) {
       steps: record.steps || '',
       expected_result: record.expected_result,
       status: record.status,
-      tags: record.tags || ''
+      tags: record.tags || '',
+      module_code: record.module_code || '',
+      case_code: record.case_code || ''
     })
   } else {
     editId.value = null
@@ -448,7 +461,9 @@ function showForm(record) {
       steps: '',
       expected_result: '',
       status: 'draft',
-      tags: ''
+      tags: '',
+      module_code: '',
+      case_code: ''
     })
   }
   formVisible.value = true

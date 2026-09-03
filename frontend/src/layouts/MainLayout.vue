@@ -9,7 +9,7 @@
     >
       <div class="logo">
         <SafetyOutlined style="font-size: 24px" />
-        <span v-if="!appStore.collapsed" class="logo-text">RBAC 管理系统</span>
+        <span v-if="!appStore.collapsed" class="logo-text">测试管理系统</span>
       </div>
       <a-menu
         v-model:selectedKeys="selectedKeys"
@@ -104,6 +104,10 @@
       <a-layout-content class="content">
         <router-view />
       </a-layout-content>
+
+      <a-layout-footer class="footer">
+        测试管理系统 &copy; {{ new Date().getFullYear() }} - zhangzhimin
+      </a-layout-footer>
     </a-layout>
   </a-layout>
 </template>
@@ -327,5 +331,14 @@ onMounted(async () => {
   background: #fff;
   border-radius: 8px;
   min-height: 280px;
+}
+
+.footer {
+  text-align: center;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  padding: 12px 24px;
+  background: #fff;
+  border-top: 1px solid #f0f0f0;
 }
 </style>

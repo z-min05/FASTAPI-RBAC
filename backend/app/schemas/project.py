@@ -8,6 +8,8 @@ class ProjectBase(BaseModel):
     description: str | None = Field(None, description="项目描述")
     owner_id: int | None = Field(None, description="负责人 user_id")
     is_active: bool = True
+    auto_root_path: str | None = Field(None, max_length=500, description="自动化测试根路径（pytest tests 目录）")
+    python_path: str | None = Field(None, max_length=500, description="Python 解释器路径，如 python 或 D:\\anaconda3\\python.exe")
 
 
 class ProjectCreate(ProjectBase):
@@ -20,6 +22,8 @@ class ProjectUpdate(BaseModel):
     description: str | None = None
     owner_id: int | None = None
     is_active: bool | None = None
+    auto_root_path: str | None = None
+    python_path: str | None = None
 
 
 class ProjectResponse(ProjectBase):

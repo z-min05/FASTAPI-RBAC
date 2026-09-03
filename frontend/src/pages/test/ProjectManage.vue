@@ -85,6 +85,12 @@
         <a-form-item label="状态">
           <a-switch v-model:checked="formState.is_active" checked-children="启用" un-checked-children="停用" />
         </a-form-item>
+        <a-form-item label="自动化根路径">
+          <a-input v-model:value="formState.auto_root_path" placeholder="pytest 用例目录绝对路径，如 D:\zzm\pytestProject\tests" />
+        </a-form-item>
+        <a-form-item label="Python 路径">
+          <a-input v-model:value="formState.python_path" placeholder="Python 解释器路径，如 python 或 D:\anaconda3\python.exe" />
+        </a-form-item>
       </a-form>
     </a-modal>
   </div>
@@ -127,6 +133,8 @@ const columns = computed(() => [
     sortDirections: ['descend', 'ascend'],
     sortOrder: order.value === 'asc' ? 'ascend' : 'descend'
   },
+  { title: '自动化根路径', dataIndex: 'auto_root_path', key: 'auto_root_path', ellipsis: true, width: 200 },
+  { title: 'Python 路径', dataIndex: 'python_path', key: 'python_path', ellipsis: true, width: 200 },
   { title: '操作', key: 'action', width: 140, fixed: 'right' }
 ])
 
@@ -167,7 +175,9 @@ const formState = reactive({
   name: '',
   description: '',
   owner_id: null,
-  is_active: true
+  is_active: true,
+  auto_root_path: '',
+  python_path: ''
 })
 
 function formatDate(val) {
@@ -218,7 +228,9 @@ function showModal(record) {
       name: record.name,
       description: record.description || '',
       owner_id: record.owner_id,
-      is_active: record.is_active
+      is_active: record.is_active,
+      auto_root_path: record.auto_root_path || '',
+      python_path: record.python_path || ''
     })
   } else {
     editId.value = null
@@ -227,7 +239,9 @@ function showModal(record) {
       name: '',
       description: '',
       owner_id: null,
-      is_active: true
+      is_active: true,
+      auto_root_path: '',
+      python_path: ''
     })
   }
   modalVisible.value = true

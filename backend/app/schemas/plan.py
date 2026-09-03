@@ -3,8 +3,8 @@ from pydantic import BaseModel, Field
 
 # 计划状态
 ALLOWED_PLAN_STATUS = ["not_started", "in_progress", "completed"]
-# 计划用例测试结果四态
-ALLOWED_RESULTS = ["pass", "fail", "blocked", "skipped"]
+# 计划用例测试结果（running 为执行中状态）
+ALLOWED_RESULTS = ["pass", "fail", "blocked", "skipped", "running"]
 # 结果统计 key 顺序（pending = 已加入计划但未回填结果）
 RESULT_STAT_KEYS = ["pass", "fail", "blocked", "skipped", "pending"]
 
@@ -59,6 +59,8 @@ class PlanTestCaseResponse(BaseModel):
     tester_name: str | None = None
     result: str | None = None
     result_desc: str | None = None
+    module_code: str | None = None
+    case_code: str | None = None
     created_at: datetime
     updated_at: datetime
 

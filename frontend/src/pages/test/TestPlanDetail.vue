@@ -55,6 +55,14 @@
           @change="reload"
         />
         <a-button @click="resetFilter">重置</a-button>
+        <a-button
+          v-if="selectedRowKeys.length > 0"
+          type="primary"
+          @click="handleBatchExecute"
+          v-permission="'plan:case:execute'"
+        >
+          批量执行 ({{ selectedRowKeys.length }})
+        </a-button>
       </a-space>
     </div>
 
@@ -67,6 +75,11 @@
       @change="handleTableChange"
       row-key="id"
       size="middle"
+      :row-selection="{
+        selectedRowKeys,
+        onChange: onSelectChange,
+        getCheckboxProps: r => ({ disabled: !(r.module_code && r.case_code) || r.result === 'running' })
+      }"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'priority'">
@@ -82,8 +95,9 @@
           {{ formatDate(record.updated_at) }}
         </template>
         <template v-if="column.key === 'action'">
-          <a-space>
+          <a-space wrap>
             <a-button type="link" size="small" @click="openCaseDetail(record)">查看</a-button>
+            <a-button v-if="record.module_code && record.case_code" type="link" size="small" :disabled="record.result === 'running'" @click="handleExecute(record)" v-permission="'plan:case:execute'">执行</a-button>
             <a-button type="link" size="small" @click="openResultModal(record)" v-permission="'plan:case:result'">记录结果</a-button>
             <a-popconfirm title="确定从该计划中移除这条用例？" @confirm="handleRemove(record.id)">
               <a-button type="link" size="small" danger v-permission="'plan:case:remove'">移除</a-button>
@@ -169,9 +183,9 @@
       title="记录测试结果"
       @ok="handleSaveResult"
       :confirm-loading="resultSaving"
-      width="560px"
+      :width="resultModalWidth"
     >
-      <a-form :model="resultForm" :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
+      <a-form :model="resultForm" :label-col="{ span: 2 }" :wrapper-col="{ span: 21 }">
         <a-form-item label="用例标题">
           <span class="case-title">{{ resultForm.title }}</span>
         </a-form-item>
@@ -195,8 +209,8 @@
         <a-form-item label="结果描述">
           <a-textarea
             v-model:value="resultForm.result_desc"
-            :rows="4"
-            placeholder="失败/阻塞时请填写原因及过程说明（测试过程记录）"
+            :rows="18"
+            placeholder="自动化执行会自动填充日志；人工记录时请填写失败原因及测试过程"
           />
         </a-form-item>
       </a-form>
@@ -257,7 +271,9 @@ import {
   getPlanCandidates,
   addPlanTestcases,
   updatePlanTestcaseResult,
-  removePlanTestcase
+  removePlanTestcase,
+  executePlanTestcase,
+  batchExecutePlanTestcases
 } from '@/api/plan'
 import { useAuthStore } from '@/stores/auth'
 import dayjs from 'dayjs'
@@ -271,6 +287,19 @@ const pageLoading = ref(true)
 const pageError = ref('')
 const loading = ref(false)
 
+// 行选择（批量执行）
+const selectedRowKeys = ref([])
+function onSelectChange(keys) {
+  selectedRowKeys.value = keys
+}
+
+// 结果弹窗宽度响应式
+const resultModalWidth = ref(800)
+function updateResultModalWidth() {
+  resultModalWidth.value = Math.min(window.innerWidth * 0.8, 1200)
+}
+updateResultModalWidth()
+
 // ---------- 常量与文案 ----------
 const statusOptions = [
   { label: '未开始', value: 'not_started' },
@@ -281,7 +310,8 @@ const resultOptions = [
   { label: '通过', value: 'pass' },
   { label: '失败', value: 'fail' },
   { label: '阻塞', value: 'blocked' },
-  { label: '跳过', value: 'skipped' }
+  { label: '跳过', value: 'skipped' },
+  { label: '执行中', value: 'running' }
 ]
 
 function statusLabel(status) {
@@ -295,11 +325,11 @@ function priorityColor(p) {
 }
 function resultLabel(result) {
   if (!result) return '未执行'
-  return { pass: '通过', fail: '失败', blocked: '阻塞', skipped: '跳过' }[result] || result
+  return { pass: '通过', fail: '失败', blocked: '阻塞', skipped: '跳过', running: '执行中' }[result] || result
 }
 function resultColor(result) {
   if (!result) return 'default'
-  return { pass: 'success', fail: 'error', blocked: 'warning', skipped: 'default' }[result] || 'default'
+  return { pass: 'success', fail: 'error', blocked: 'warning', skipped: 'default', running: 'processing' }[result] || 'default'
 }
 function tcStatusLabel(status) {
   return { draft: '草稿', reviewed: '已评审', archived: '已归档' }[status] || status || '-'
@@ -378,7 +408,7 @@ const columns = [
   { title: '结果', dataIndex: 'result', key: 'result', width: 90 },
   { title: '结果描述', dataIndex: 'result_desc', key: 'result_desc', width: 200, ellipsis: true },
   { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 170 },
-  { title: '操作', key: 'action', width: 190, fixed: 'right' }
+  { title: '操作', key: 'action', width: 230, fixed: 'right' }
 ]
 
 const tableData = ref([])
@@ -544,12 +574,35 @@ async function handleSaveResult() {
   }
 }
 
-// ---------- 移除 / 查看 ----------
+// ---------- 移除 / 执行 / 查看 ----------
 async function handleRemove(ptcId) {
   await removePlanTestcase(planId, ptcId)
   message.success('已从计划中移除')
   loadPlan()
   loadTestcases()
+}
+
+async function handleExecute(record) {
+  try {
+    await executePlanTestcase(planId, record.id)
+    message.success('已提交自动化执行，请稍后刷新查看结果')
+    loadTestcases()
+  } catch (e) {
+    // 错误已由拦截器提示
+  }
+}
+
+async function handleBatchExecute() {
+  const ids = selectedRowKeys.value
+  if (!ids.length) return
+  try {
+    await batchExecutePlanTestcases(planId, ids)
+    message.success(`已提交批量执行 (${ids.length} 条用例)，串行执行中，请稍后刷新查看结果`)
+    selectedRowKeys.value = []
+    loadTestcases()
+  } catch (e) {
+    // 错误已由拦截器提示
+  }
 }
 
 const caseDetailVisible = ref(false)

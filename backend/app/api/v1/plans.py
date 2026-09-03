@@ -1,6 +1,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -159,3 +160,31 @@ async def remove_testcase(
     service = PlanService(db)
     await service.remove_testcase(plan_id, ptc_id)
     return Response.success(message="已从计划中移除")
+
+
+@router.post("/{plan_id}/testcases/{ptc_id}/execute", summary="触发自动化执行")
+async def execute_auto_case(
+    plan_id: int,
+    ptc_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions("plan:case:execute")),
+):
+    service = PlanService(db)
+    await service.execute_auto_case(plan_id, ptc_id, current_user)
+    return Response.success(message="已提交自动化执行，请稍后刷新查看结果")
+
+
+class BatchExecuteRequest(BaseModel):
+    ptc_ids: list[int] = Field(..., description="要执行的计划用例ID列表")
+
+
+@router.post("/{plan_id}/testcases/batch-execute", summary="批量串行自动化执行")
+async def batch_execute_auto_cases(
+    plan_id: int,
+    body: BatchExecuteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions("plan:case:execute")),
+):
+    service = PlanService(db)
+    await service.execute_auto_cases(plan_id, body.ptc_ids, current_user)
+    return Response.success(message=f"已提交批量执行 ({len(body.ptc_ids)} 条用例)，串行执行中，请稍后刷新查看结果")

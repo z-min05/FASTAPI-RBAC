@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +21,8 @@ from app.schemas.plan import (
 )
 from app.core.pagination import PaginationParams, PaginatedResponse
 from app.exceptions import NotFoundException, BadRequestException
+from app.services.auto_exec_service import execute_testcase_background
+from app.db.session import AsyncSessionLocal
 
 
 def _empty_stats() -> dict:
@@ -272,6 +276,119 @@ class PlanService:
             raise NotFoundException("计划用例不存在")
         await self.pt_repo.delete(pt.id)
 
+    # ---------- 自动化执行 ----------
+
+    async def execute_auto_case(
+        self,
+        plan_id: int,
+        ptc_id: int,
+        current_user: User,
+    ) -> None:
+        """触发自动化执行：检查自动化字段都齐了 -> 设置 result=running -> 后台异步执行 pytest"""
+        plan = await self.get_plan(plan_id)
+        pt = await self.pt_repo.get_by_id(ptc_id)
+        if not pt or pt.plan_id != plan.id:
+            raise NotFoundException("计划用例不存在")
+
+        tc = await self.testcase_repo.get_by_id(pt.testcase_id)
+        if not tc:
+            raise NotFoundException("关联用例不存在")
+
+        # 检查自动化配置是否完整
+        if not tc.module_code or not tc.case_code:
+            raise BadRequestException("该用例未配置模块编码或用例编码，无法自动化执行")
+
+        project = await self.project_repo.get_by_id(plan.project_id)
+        if not project:
+            raise NotFoundException("所属项目不存在")
+        if not project.auto_root_path:
+           raise BadRequestException("所属项目未配置自动化根路径，无法自动化执行")
+        if not project.python_path:
+            raise BadRequestException("所属项目未配置 Python 解释器路径，无法自动化执行")
+
+        test_file = os.path.join(project.auto_root_path, f"{tc.module_code}.py")
+        python_path = project.python_path
+
+        # 设置为 running，后台执行
+        await self.pt_repo.update(pt.id, {"result": "running", "result_desc": "正在执行中...", "tester_id": current_user.id})
+        await self.db.commit()
+
+        # 启动后台异步任务
+        import asyncio
+        task = asyncio.create_task(
+            execute_testcase_background(
+                AsyncSessionLocal,
+                plan_id,
+                ptc_id,
+                python_path,
+                test_file,
+                tc.case_code,
+                project.auto_root_path,
+                current_user.id,
+            )
+        )
+
+        # 保持强引用避免被 GC 回收
+        from app.services.auto_exec_service import _running_tasks
+        _running_tasks.add(task)
+        def done_callback(t):
+            _running_tasks.discard(t)
+        task.add_done_callback(done_callback)
+
+    async def execute_auto_cases(
+        self,
+        plan_id: int,
+        ptc_ids: list[int],
+        current_user: User,
+    ) -> None:
+        """批量串行执行自动化用例：全部设为 running -> 启动一个后台任务串行执行"""
+        plan = await self.get_plan(plan_id)
+        project = await self.project_repo.get_by_id(plan.project_id)
+        if not project:
+            raise NotFoundException("所属项目不存在")
+        if not project.auto_root_path:
+            raise BadRequestException("所属项目未配置自动化根路径，无法自动化执行")
+        if not project.python_path:
+            raise BadRequestException("所属项目未配置 Python 解释器路径，无法自动化执行")
+
+        python_path = project.python_path
+        entries: list[tuple[int, int, str, str]] = []  # (ptc_id, testcase_id, test_file, case_code)
+
+        for ptc_id in ptc_ids:
+            pt = await self.pt_repo.get_by_id(ptc_id)
+            if not pt or pt.plan_id != plan.id:
+                raise BadRequestException(f"计划用例 {ptc_id} 不存在")
+            tc = await self.testcase_repo.get_by_id(pt.testcase_id)
+            if not tc:
+                raise BadRequestException(f"关联用例不存在 (ptc_id={ptc_id})")
+            if not tc.module_code or not tc.case_code:
+                raise BadRequestException(f"用例「{tc.title}」未配置模块编码或用例编码")
+            test_file = os.path.join(project.auto_root_path, f"{tc.module_code}.py")
+            entries.append((ptc_id, tc.id, test_file, tc.case_code))
+
+        # 全部设为 running
+        for ptc_id, _, _, _ in entries:
+            await self.pt_repo.update(ptc_id, {"result": "running", "result_desc": "正在执行中..."})
+        await self.db.commit()
+
+        # 启动一个后台任务串行执行
+        import asyncio
+        from app.services.auto_exec_service import _execute_cases_sequential, _running_tasks
+        task = asyncio.create_task(
+            _execute_cases_sequential(
+                AsyncSessionLocal,
+                plan_id,
+                entries,
+                python_path,
+                project.auto_root_path,
+                current_user.id,
+            )
+        )
+        _running_tasks.add(task)
+        def done_callback(t):
+            _running_tasks.discard(t)
+        task.add_done_callback(done_callback)
+
     # ---------- 响应组装辅助 ----------
 
     async def _get_testcase_map(self, testcase_ids: list[int]) -> dict[int, TestCase]:
@@ -315,6 +432,8 @@ class PlanService:
             tester_name=(user.nickname or user.username) if user else None,
             result=pt.result,
             result_desc=pt.result_desc,
+            module_code=tc.module_code if tc else None,
+            case_code=tc.case_code if tc else None,
             created_at=pt.created_at,
             updated_at=pt.updated_at,
         ).model_dump()

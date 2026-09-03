@@ -20,5 +20,7 @@ class TestCase(BaseModel):
     expected_result: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
     tags: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    module_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    case_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     project = relationship("Project", back_populates="testcases", lazy="noload")
