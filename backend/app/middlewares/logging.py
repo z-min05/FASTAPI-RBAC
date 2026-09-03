@@ -49,7 +49,12 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 
         # 捕获响应体
         response_body = None
-        if request.method != "GET":
+        # SSE（text/event-stream）等流式响应直接透传：
+        # 若在此处消费 response.body_iterator，会先把整条流在服务端缓冲，
+        # 并且重建响应时只保留前 4000 字符——SSE 末尾的 done 事件会被截掉，
+        # 导致前端永远等不到流结束。因此流式响应不做响应体捕获/重建。
+        content_type = response.headers.get("content-type", "")
+        if request.method != "GET" and "text/event-stream" not in content_type:
             try:
                 # 读取 response body chunks
                 body_chunks = []
