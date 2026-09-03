@@ -63,6 +63,14 @@
         >
           批量执行 ({{ selectedRowKeys.length }})
         </a-button>
+        <a-button
+          v-if="hasRunningCases"
+          danger
+          @click="handleStopExecution"
+          v-permission="'plan:case:execute'"
+        >
+          停止执行
+        </a-button>
       </a-space>
     </div>
 
@@ -259,7 +267,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { PlusOutlined, ArrowLeftOutlined, EditOutlined } from '@ant-design/icons-vue'
@@ -273,7 +281,8 @@ import {
   updatePlanTestcaseResult,
   removePlanTestcase,
   executePlanTestcase,
-  batchExecutePlanTestcases
+  batchExecutePlanTestcases,
+  stopPlanExecution
 } from '@/api/plan'
 import { useAuthStore } from '@/stores/auth'
 import dayjs from 'dayjs'
@@ -299,6 +308,11 @@ function updateResultModalWidth() {
   resultModalWidth.value = Math.min(window.innerWidth * 0.8, 1200)
 }
 updateResultModalWidth()
+
+// 当前页面是否有执行中的用例（显示停止按钮）
+const hasRunningCases = computed(() => {
+  return tableData.value ? tableData.value.some(tc => tc.result === 'running') : false
+})
 
 // ---------- 常量与文案 ----------
 const statusOptions = [
@@ -600,6 +614,15 @@ async function handleBatchExecute() {
     message.success(`已提交批量执行 (${ids.length} 条用例)，串行执行中，请稍后刷新查看结果`)
     selectedRowKeys.value = []
     loadTestcases()
+  } catch (e) {
+    // 错误已由拦截器提示
+  }
+}
+
+async function handleStopExecution() {
+  try {
+    await stopPlanExecution(planId)
+    message.success('已请求停止批量执行，剩余未执行的用例将被跳过')
   } catch (e) {
     // 错误已由拦截器提示
   }

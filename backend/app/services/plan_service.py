@@ -389,6 +389,11 @@ class PlanService:
             _running_tasks.discard(t)
         task.add_done_callback(done_callback)
 
+    async def stop_execution(self, plan_id: int) -> None:
+        """停止指定计划的批量执行"""
+        from app.services.auto_exec_service import _stop_batch_flags
+        _stop_batch_flags[plan_id] = True
+
     # ---------- 响应组装辅助 ----------
 
     async def _get_testcase_map(self, testcase_ids: list[int]) -> dict[int, TestCase]:

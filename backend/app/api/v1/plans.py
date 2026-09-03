@@ -188,3 +188,14 @@ async def batch_execute_auto_cases(
     service = PlanService(db)
     await service.execute_auto_cases(plan_id, body.ptc_ids, current_user)
     return Response.success(message=f"已提交批量执行 ({len(body.ptc_ids)} 条用例)，串行执行中，请稍后刷新查看结果")
+
+
+@router.post("/{plan_id}/testcases/stop-execution", summary="停止批量执行")
+async def stop_execution(
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions("plan:case:execute")),
+):
+    service = PlanService(db)
+    await service.stop_execution(plan_id)
+    return Response.success(message="已请求停止批量执行，剩余未执行的用例将被跳过")

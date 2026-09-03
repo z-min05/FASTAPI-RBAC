@@ -16,6 +16,9 @@ if TYPE_CHECKING:
 # 存储后台任务引用，避免被 GC 回收
 _running_tasks: set = set()
 
+# 批量执行停止标志 {plan_id: True=停止}
+_stop_batch_flags: dict[int, bool] = {}
+
 
 # ---------- 日志提取 ----------
 
@@ -193,7 +196,22 @@ async def _execute_cases_sequential(
     current_tester_id: int | None,
 ) -> None:
     """批量串行执行多个用例，一个接一个，每次完成更新结果"""
-    for ptc_id, _, test_file, test_func in entries:
+    for idx, (ptc_id, _, test_file, test_func) in enumerate(entries):
+        # 检查是否被要求停止
+        if _stop_batch_flags.get(plan_id):
+            _stop_batch_flags.pop(plan_id, None)
+            # 剩余未执行的标记为 skipped
+            remaining = entries[idx:]
+            from sqlalchemy.ext.asyncio import AsyncSession
+            from app.models.plan_testcase import PlanTestCase
+            async with db_session_factory() as session:
+                for rid, _, _, _ in remaining:
+                    pt = await session.get(PlanTestCase, rid)
+                    if pt and pt.plan_id == plan_id and pt.result == "running":
+                        pt.result = "skipped"
+                        pt.result_desc = "已被用户终止执行"
+                await session.commit()
+            return
         # 更新数据库标记为执行中
         from sqlalchemy.ext.asyncio import AsyncSession
         from app.models.plan_testcase import PlanTestCase

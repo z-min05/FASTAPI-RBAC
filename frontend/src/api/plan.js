@@ -55,3 +55,7 @@ export function executePlanTestcase(planId, ptcId) {
 export function batchExecutePlanTestcases(planId, ptcIds) {
   return request.post(`/plans/${planId}/testcases/batch-execute`, { ptc_ids: ptcIds })
 }
+
+export function stopPlanExecution(planId) {
+  return request.post(`/plans/${planId}/testcases/stop-execution`)
+}
