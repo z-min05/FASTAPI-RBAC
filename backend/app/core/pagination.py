@@ -70,6 +70,7 @@ async def paginate(
     params: PaginationParams,
     filters: list | None = None,
     options: list | None = None,
+    order_by: list | None = None,
 ) -> PaginatedResponse:
     """通用分页查询"""
     # 计算总数
@@ -87,6 +88,8 @@ async def paginate(
     if filters:
         for f in filters:
             stmt = stmt.where(f)
+    if order_by:
+        stmt = stmt.order_by(*order_by)
     stmt = stmt.offset(params.offset).limit(params.page_size)
 
     result = await db.execute(stmt)

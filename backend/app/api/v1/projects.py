@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from typing import Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -16,12 +17,13 @@ router = APIRouter(prefix="/projects", tags=["项目管理"])
 async def get_projects(
     keyword: str | None = Query(None, description="关键字（编码/名称）"),
     is_active: bool | None = Query(None, description="启用状态"),
+    order: Literal["asc", "desc"] = Query("desc", description="创建时间排序：asc 正序 / desc 倒序（默认倒序）"),
     params: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permissions("project:list")),
 ):
     service = ProjectService(db)
-    result = await service.get_projects(params, keyword, is_active)
+    result = await service.get_projects(params, keyword, is_active, order)
     raw = result.model_dump()
     raw["items"] = [ProjectResponse.model_validate(p).model_dump() for p in result.items]
     return Response.success(data=raw)

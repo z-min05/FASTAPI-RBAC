@@ -24,8 +24,9 @@ class ProjectService:
         params: PaginationParams,
         keyword: str | None = None,
         is_active: bool | None = None,
+        order: str = "desc",
     ) -> PaginatedResponse:
-        return await self.project_repo.get_paginated(params, keyword, is_active)
+        return await self.project_repo.get_paginated(params, keyword, is_active, order)
 
     async def get_all_projects(self) -> list[Project]:
         """全部启用中的项目（下拉用）"""
@@ -65,4 +66,7 @@ class ProjectService:
         count = await self.project_repo.count_testcases(project_id)
         if count > 0:
             raise ConflictException(f"该项目下存在 {count} 条用例，请先删除用例")
+        plan_count = await PlanRepository(self.db).count_by_project(project_id)
+        if plan_count > 0:
+            raise ConflictException(f"该项目下存在 {plan_count} 个测试计划，请先删除计划")
         await self.project_repo.delete(project_id)

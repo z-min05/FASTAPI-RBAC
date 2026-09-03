@@ -9,8 +9,8 @@ class LogService:
         self.db = db
         self.log_repo = LogRepository(db)
 
-    async def get_logs(self, params: PaginationParams) -> PaginatedResponse:
-        return await self.log_repo.get_paginated(params)
+    async def get_logs(self, params: PaginationParams, order: str = "desc") -> PaginatedResponse:
+        return await self.log_repo.get_paginated(params, order)
 
     async def get_user_logs(self, user_id: int) -> list[OperationLog]:
         return await self.log_repo.get_by_user_id(user_id)

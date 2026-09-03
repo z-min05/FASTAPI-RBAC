@@ -97,9 +97,10 @@ class TestCaseService:
         status: str | None = None,
         source: str | None = None,
         keyword: str | None = None,
+        order: str = "desc",
     ) -> PaginatedResponse:
         filters = self._build_filters(project_id, module, priority, status, source, keyword)
-        result = await self.testcase_repo.get_paginated(params, filters or None)
+        result = await self.testcase_repo.get_paginated(params, filters or None, order)
 
         project_map = await self._get_project_map([tc.project_id for tc in result.items])
         items = [self._to_response(tc, project_map) for tc in result.items]
@@ -169,10 +170,16 @@ class TestCaseService:
             raise BadRequestException("项目已停用，不能在该项目下操作用例")
 
     async def delete_testcase(self, testcase_id: int) -> None:
+        refs = await self.plan_tc_repo.count_by_testcase(testcase_id)
+        if refs > 0:
+            raise ConflictException(f"用例已被 {refs} 个测试计划引用，请先从计划中移除后再删除")
         if not await self.testcase_repo.delete(testcase_id):
             raise NotFoundException("用例不存在")
 
     async def delete_testcases(self, ids: list[int]) -> int:
+        refs = await self.plan_tc_repo.count_by_testcases(ids)
+        if refs > 0:
+            raise ConflictException("存在被测试计划引用的用例，请先从计划中移除后再批量删除")
         return await self.testcase_repo.delete_batch(ids)
 
     # ---------- CSV 导入导出 ----------

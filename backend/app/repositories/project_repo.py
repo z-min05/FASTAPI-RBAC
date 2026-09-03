@@ -1,4 +1,4 @@
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, asc, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.project import Project
 from app.models.testcase import TestCase
@@ -15,6 +15,7 @@ class ProjectRepository(BaseRepository):
         params: PaginationParams,
         keyword: str | None = None,
         is_active: bool | None = None,
+        order: str = "desc",
     ) -> PaginatedResponse:
         filters = []
         if keyword:
@@ -26,7 +27,11 @@ class ProjectRepository(BaseRepository):
             )
         if is_active is not None:
             filters.append(Project.is_active == is_active)
-        return await super().get_paginated(params, filters or None)
+        # 按创建时间排序（默认倒序：最新创建在前），id 作为稳定次序
+        created_col = desc if order == "desc" else asc
+        id_col = desc if order == "desc" else asc
+        order_by = [created_col(Project.created_at), id_col(Project.id)]
+        return await super().get_paginated(params, filters or None, order_by=order_by)
 
     async def get_by_code(self, code: str) -> Project | None:
         stmt = select(Project).where(Project.code == code)

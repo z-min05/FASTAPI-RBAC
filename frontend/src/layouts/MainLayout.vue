@@ -132,6 +132,7 @@ import {
   OrderedListOutlined,
   PartitionOutlined,
   FileSearchOutlined,
+  ScheduleOutlined,
   FundOutlined,
   BuildOutlined,
   FolderOutlined,
@@ -162,6 +163,7 @@ const iconMap = {
   OrderedListOutlined,
   PartitionOutlined,
   FileSearchOutlined,
+  ScheduleOutlined,
   FolderOutlined,
   RobotOutlined,
   MessageOutlined,
@@ -194,16 +196,34 @@ function findParentKeys(menus, targetPath) {
   return []
 }
 
+// 详情页等隐藏路由：菜单无完全匹配路径时，取最长的菜单路径前缀做高亮
+function findBestMenuPath(menus, targetPath) {
+  let best = ''
+  const walk = (list) => {
+    for (const m of list || []) {
+      if (m.menu_type === 'menu' && (targetPath === m.path || targetPath.startsWith(m.path + '/'))) {
+        if (m.path.length > best.length) best = m.path
+      }
+      if (m.children && m.children.length) walk(m.children)
+    }
+  }
+  walk(menus)
+  return best || targetPath
+}
+
+function syncMenu(path) {
+  const target = route.meta?.activeMenu || findBestMenuPath(menuList.value, path)
+  selectedKeys.value = [target]
+  openKeys.value = findParentKeys(menuList.value, target)
+}
+
 watch(
   () => route.path,
-  (path) => {
-    selectedKeys.value = [path]
-    openKeys.value = findParentKeys(menuList.value, path)
-  }
+  (path) => syncMenu(path)
 )
 
 watch(menuList, () => {
-  openKeys.value = findParentKeys(menuList.value, route.path)
+  syncMenu(route.path)
 }, { immediate: true })
 
 function onMenuClick({ key }) {

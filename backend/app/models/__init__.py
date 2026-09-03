@@ -27,6 +27,8 @@ __all__ = [
     "OperationLog",
     "Project",
     "TestCase",
+    "TestPlan",
+    "PlanTestCase",
     "AgentConversation",
     "AgentMessage",
     "AgentTokenRecord",

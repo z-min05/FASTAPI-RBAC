@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -25,13 +26,14 @@ async def get_testcases(
     status: str | None = Query(None, description="状态"),
     source: str | None = Query(None, description="来源"),
     keyword: str | None = Query(None, description="关键字（标题/模块）"),
+    order: Literal["asc", "desc"] = Query("desc", description="创建时间排序：asc 正序 / desc 倒序（默认倒序）"),
     params: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permissions("testcase:list")),
 ):
     service = TestCaseService(db)
     result = await service.get_testcases(
-        params, project_id, module, priority, status, source, keyword
+        params, project_id, module, priority, status, source, keyword, order
     )
     raw = result.model_dump()
     return Response.success(data=raw)

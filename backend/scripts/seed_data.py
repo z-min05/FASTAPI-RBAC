@@ -34,6 +34,15 @@ TEST_PERMISSIONS = [
     {"name": "删除用例", "code": "testcase:delete", "module": "testcase", "action": "delete"},
     {"name": "用例导出", "code": "testcase:export", "module": "testcase", "action": "export"},
     {"name": "用例导入", "code": "testcase:import", "module": "testcase", "action": "import"},
+    {"name": "测试计划列表", "code": "plan:list", "module": "plan", "action": "list"},
+    {"name": "测试计划详情", "code": "plan:detail", "module": "plan", "action": "detail"},
+    {"name": "创建测试计划", "code": "plan:create", "module": "plan", "action": "create"},
+    {"name": "更新测试计划", "code": "plan:update", "module": "plan", "action": "update"},
+    {"name": "删除测试计划", "code": "plan:delete", "module": "plan", "action": "delete"},
+    {"name": "计划用例列表", "code": "plan:case:list", "module": "plan", "action": "case:list"},
+    {"name": "添加计划用例", "code": "plan:case:add", "module": "plan", "action": "case:add"},
+    {"name": "记录测试结果", "code": "plan:case:result", "module": "plan", "action": "case:result"},
+    {"name": "移除计划用例", "code": "plan:case:remove", "module": "plan", "action": "case:remove"},
 ]
 
 TEST_MENUS = [
@@ -61,6 +70,19 @@ TEST_MENUS = [
                     {"name": "删除用例", "menu_type": "button", "permission": "testcase:delete", "sort": 3},
                     {"name": "导入用例", "menu_type": "button", "permission": "testcase:import", "sort": 4},
                     {"name": "导出用例", "menu_type": "button", "permission": "testcase:export", "sort": 5},
+                ],
+            },
+            {
+                "name": "测试计划", "path": "/test/plans", "component": "test/TestPlanManage",
+                "icon": "ScheduleOutlined", "menu_type": "menu", "sort": 3,
+                "permission": "plan:list", "visible": True,
+                "children": [
+                    {"name": "新增计划", "menu_type": "button", "permission": "plan:create", "sort": 1},
+                    {"name": "编辑计划", "menu_type": "button", "permission": "plan:update", "sort": 2},
+                    {"name": "删除计划", "menu_type": "button", "permission": "plan:delete", "sort": 3},
+                    {"name": "添加用例", "menu_type": "button", "permission": "plan:case:add", "sort": 4},
+                    {"name": "记录结果", "menu_type": "button", "permission": "plan:case:result", "sort": 5},
+                    {"name": "移除用例", "menu_type": "button", "permission": "plan:case:remove", "sort": 6},
                 ],
             },
         ],
