@@ -59,3 +59,7 @@ export function batchExecutePlanTestcases(planId, ptcIds) {
 export function stopPlanExecution(planId) {
   return request.post(`/plans/${planId}/testcases/stop-execution`)
 }
+
+export function exportPlanTestcases(planId) {
+  return request.get(`/plans/${planId}/testcases/export`, { responseType: 'blob' })
+}

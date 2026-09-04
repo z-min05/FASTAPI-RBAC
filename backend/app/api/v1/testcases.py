@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.dependency import require_permissions
+from app.dependency import require_permissions_any
 from app.models.user import User
 from app.schemas.common import IDListRequest
 from app.schemas.testcase import TestCaseCreate, TestCaseUpdate, TestCaseResponse
@@ -29,7 +29,7 @@ async def get_testcases(
     order: Literal["asc", "desc"] = Query("desc", description="创建时间排序：asc 正序 / desc 倒序（默认倒序）"),
     params: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("testcase:list")),
+    current_user: User = Depends(require_permissions_any("testcase:list")),
 ):
     service = TestCaseService(db)
     result = await service.get_testcases(
@@ -43,7 +43,7 @@ async def get_testcases(
 async def get_modules(
     project_id: int | None = Query(None, description="项目 ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("testcase:list")),
+    current_user: User = Depends(require_permissions_any("testcase:list")),
 ):
     service = TestCaseService(db)
     modules = await service.get_modules(project_id)
@@ -54,7 +54,7 @@ async def get_modules(
 async def batch_delete_testcases(
     data: IDListRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("testcase:delete")),
+    current_user: User = Depends(require_permissions_any("testcase:delete")),
 ):
     service = TestCaseService(db)
     count = await service.delete_testcases(data.ids)
@@ -64,7 +64,7 @@ async def batch_delete_testcases(
 @router.get("/import-template", summary="导入模板下载(xlsx)")
 async def import_template(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("testcase:import")),
+    current_user: User = Depends(require_permissions_any("testcase:import")),
 ):
     import base64
 
@@ -86,7 +86,7 @@ class ImportRequest(BaseModel):
 async def import_testcases(
     data: ImportRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("testcase:import")),
+    current_user: User = Depends(require_permissions_any("testcase:import")),
 ):
     import base64
 
@@ -111,7 +111,7 @@ async def export_testcases(
     source: str | None = Query(None, description="来源"),
     keyword: str | None = Query(None, description="关键字"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("testcase:export")),
+    current_user: User = Depends(require_permissions_any("testcase:export")),
 ):
     service = TestCaseService(db)
     content = await service.export_csv(project_id, module, priority, status, source, keyword)
@@ -123,7 +123,7 @@ async def export_testcases(
 async def get_testcase(
     testcase_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("testcase:detail")),
+    current_user: User = Depends(require_permissions_any("testcase:detail")),
 ):
     service = TestCaseService(db)
     tc = await service.get_testcase(testcase_id)
@@ -135,7 +135,7 @@ async def get_testcase(
 async def create_testcase(
     data: TestCaseCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("testcase:create")),
+    current_user: User = Depends(require_permissions_any("testcase:create")),
 ):
     service = TestCaseService(db)
     tc = await service.create_testcase(data)
@@ -148,7 +148,7 @@ async def update_testcase(
     testcase_id: int,
     data: TestCaseUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("testcase:update")),
+    current_user: User = Depends(require_permissions_any("testcase:update")),
 ):
     service = TestCaseService(db)
     tc = await service.update_testcase(testcase_id, data)
@@ -160,7 +160,7 @@ async def update_testcase(
 async def delete_testcase(
     testcase_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("testcase:delete")),
+    current_user: User = Depends(require_permissions_any("testcase:delete")),
 ):
     service = TestCaseService(db)
     await service.delete_testcase(testcase_id)

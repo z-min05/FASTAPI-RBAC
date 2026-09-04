@@ -7,7 +7,7 @@
 用法：python -m scripts.seed_data
 """
 import asyncio
-from sqlalchemy import select, text
+from sqlalchemy import select, text, func
 from app.db.session import AsyncSessionLocal, engine
 from app.models.base import Base
 from app.security import get_password_hash
@@ -353,6 +353,124 @@ async def _sync_casbin(db):
     print("Casbin 策略同步完成")
 
 
+API_KEY_PERMISSIONS = [
+    {"name": "API 密钥列表", "code": "api-key:list", "module": "api_key", "action": "list"},
+    {"name": "创建 API 密钥", "code": "api-key:create", "module": "api_key", "action": "create"},
+    {"name": "更新 API 密钥", "code": "api-key:update", "module": "api_key", "action": "update"},
+    {"name": "删除 API 密钥", "code": "api-key:delete", "module": "api_key", "action": "delete"},
+]
+
+API_KEY_MENU_CHILDREN = [
+    {"name": "新增密钥", "menu_type": "button", "permission": "api-key:create", "sort": 1},
+    {"name": "编辑密钥", "menu_type": "button", "permission": "api-key:update", "sort": 2},
+    {"name": "删除密钥", "menu_type": "button", "permission": "api-key:delete", "sort": 3},
+]
+
+
+async def _ensure_api_key_module(db):
+    """幂等创建 API 密钥模块的权限、菜单（含按钮）与角色授权"""
+    # 1. 权限
+    perm_objs = {}
+    for p in API_KEY_PERMISSIONS:
+        result = await db.execute(select(Permission).where(Permission.code == p["code"]))
+        perm = result.scalar_one_or_none()
+        if not perm:
+            perm = Permission(**p)
+            db.add(perm)
+            await db.flush()
+        perm_objs[p["code"]] = perm
+
+    # 2. 菜单：查找系统管理目录，在其下添加 API 密钥菜单
+    sys_dir = await db.execute(
+        select(Menu).where(Menu.path == "/system", Menu.menu_type == "directory")
+    )
+    sys_dir = sys_dir.scalar_one_or_none()
+    if not sys_dir:
+        return
+
+    # 查找或创建 API 密钥菜单
+    api_key_menu = await db.execute(
+        select(Menu).where(Menu.path == "/system/api-keys", Menu.parent_id == sys_dir.id)
+    )
+    api_key_menu = api_key_menu.scalar_one_or_none()
+    if not api_key_menu:
+        # 获取最大 sort
+        max_sort_result = await db.execute(
+            select(func.max(Menu.sort)).where(Menu.parent_id == sys_dir.id)
+        )
+        max_sort = max_sort_result.scalar() or 0
+        api_key_menu = Menu(
+            name="API 密钥", path="/system/api-keys", component="system/api-keys/index",
+            icon="KeyOutlined", menu_type="menu", parent_id=sys_dir.id,
+            sort=max_sort + 1, permission="api-key:list",
+        )
+        db.add(api_key_menu)
+        await db.flush()
+
+    module_menus = [api_key_menu]
+
+    # 按钮
+    for btn_def in API_KEY_MENU_CHILDREN:
+        result = await db.execute(
+            select(Menu).where(
+                Menu.name == btn_def["name"],
+                Menu.parent_id == api_key_menu.id,
+                Menu.menu_type == "button",
+            )
+        )
+        btn = result.scalar_one_or_none()
+        if not btn:
+            btn = Menu(
+                name=btn_def["name"], menu_type="button",
+                permission=btn_def["permission"], parent_id=api_key_menu.id, sort=btn_def["sort"],
+            )
+            db.add(btn)
+            await db.flush()
+        module_menus.append(btn)
+
+    # 3. 角色授权
+    admin_role = (await db.execute(select(Role).where(Role.code == "admin"))).scalar_one_or_none()
+    user_role = (await db.execute(select(Role).where(Role.code == "user"))).scalar_one_or_none()
+
+    for code, perm in perm_objs.items():
+        if admin_role:
+            r = await db.execute(
+                select(role_permissions).where(
+                    role_permissions.c.role_id == admin_role.id,
+                    role_permissions.c.permission_id == perm.id,
+                )
+            )
+            if not r.first():
+                await db.execute(
+                    role_permissions.insert().values(role_id=admin_role.id, permission_id=perm.id)
+                )
+        if user_role and code.endswith(":list"):
+            r = await db.execute(
+                select(role_permissions).where(
+                    role_permissions.c.role_id == user_role.id,
+                    role_permissions.c.permission_id == perm.id,
+                )
+            )
+            if not r.first():
+                await db.execute(
+                    role_permissions.insert().values(role_id=user_role.id, permission_id=perm.id)
+                )
+
+    for m in module_menus:
+        if admin_role:
+            r = await db.execute(
+                select(role_menus).where(role_menus.c.role_id == admin_role.id, role_menus.c.menu_id == m.id)
+            )
+            if not r.first():
+                await db.execute(role_menus.insert().values(role_id=admin_role.id, menu_id=m.id))
+        if user_role and m.menu_type != "button":
+            r = await db.execute(
+                select(role_menus).where(role_menus.c.role_id == user_role.id, role_menus.c.menu_id == m.id)
+            )
+            if not r.first():
+                await db.execute(role_menus.insert().values(role_id=user_role.id, menu_id=m.id))
+
+
 async def seed():
     # 1. 创建所有表
     async with engine.begin() as conn:
@@ -363,9 +481,10 @@ async def seed():
         result = await db.execute(select(User).limit(1))
         if result.scalar_one_or_none():
             # 已有数据：增量补充新增模块的权限/菜单/角色授权（幂等）
-            print("检测到已有数据，增量补充测试管理/AI 助手模块权限/菜单")
+            print("检测到已有数据，增量补充测试管理/AI 助手/API 密钥模块权限/菜单")
             await _ensure_test_module(db)
             await _ensure_agent_module(db)
+            await _ensure_api_key_module(db)
             await db.commit()
             await _sync_casbin(db)
             print("增量补充完成")
@@ -405,6 +524,11 @@ async def seed():
             {"name": "删除部门", "code": "department:delete", "module": "department", "action": "delete"},
             # 日志模块
             {"name": "日志列表", "code": "log:list", "module": "log", "action": "list"},
+            # API 密钥模块
+            {"name": "API 密钥列表", "code": "api-key:list", "module": "api_key", "action": "list"},
+            {"name": "创建 API 密钥", "code": "api-key:create", "module": "api_key", "action": "create"},
+            {"name": "更新 API 密钥", "code": "api-key:update", "module": "api_key", "action": "update"},
+            {"name": "删除 API 密钥", "code": "api-key:delete", "module": "api_key", "action": "delete"},
         ]
         perms = []
         for p in permissions_data:
@@ -539,6 +663,27 @@ async def seed():
             sort=6, permission="log:list"
         )
         db.add(log_menu)
+        await db.flush()
+
+        # API 密钥管理
+        api_key_menu = Menu(
+            name="API 密钥", path="/system/api-keys", component="system/api-keys/index",
+            icon="KeyOutlined", menu_type="menu", parent_id=system_menu.id,
+            sort=7, permission="api-key:list"
+        )
+        db.add(api_key_menu)
+        await db.flush()
+
+        api_key_buttons = [
+            {"name": "新增密钥", "permission": "api-key:create", "sort": 1},
+            {"name": "编辑密钥", "permission": "api-key:update", "sort": 2},
+            {"name": "删除密钥", "permission": "api-key:delete", "sort": 3},
+        ]
+        for b in api_key_buttons:
+            db.add(Menu(
+                name=b["name"], menu_type="button",
+                parent_id=api_key_menu.id, permission=b["permission"], sort=b["sort"]
+            ))
         await db.flush()
 
         # 获取所有菜单 ID

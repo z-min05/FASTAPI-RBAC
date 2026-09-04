@@ -349,8 +349,33 @@ def upgrade() -> None:
     op.create_index('ix_plan_testcases_plan_id', 'plan_testcases', ['plan_id'])
     op.create_index('ix_plan_testcases_testcase_id', 'plan_testcases', ['testcase_id'])
 
+    # ==================== v1.0.1：API 密钥 ====================
+    op.create_table(
+        'api_keys',
+        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+        sa.Column('name', sa.String(length=100), nullable=False, comment='密钥名称/描述'),
+        sa.Column('key_hash', sa.String(length=255), nullable=False, comment='密钥哈希值'),
+        sa.Column('key_prefix', sa.String(length=10), nullable=False, comment='密钥前缀'),
+        sa.Column('role_id', sa.Integer(), nullable=True),
+        sa.Column('expires_at', sa.DateTime(), nullable=True, comment='过期时间'),
+        sa.Column('is_active', sa.Boolean(), nullable=False),
+        sa.Column('last_used_at', sa.DateTime(), nullable=True, comment='最后使用时间'),
+        sa.Column('created_by', sa.Integer(), nullable=True),
+        sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(['created_by'], ['users.id'], ondelete='SET NULL'),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('ix_api_keys_key_hash', 'api_keys', ['key_hash'], unique=True)
+    op.create_index('ix_api_keys_role_id', 'api_keys', ['role_id'])
+
 
 def downgrade() -> None:
+    # 反向顺序删除
+    op.drop_index('ix_api_keys_role_id', table_name='api_keys')
+    op.drop_index('ix_api_keys_key_hash', table_name='api_keys')
+    op.drop_table('api_keys')
     # 反向顺序删除
     op.drop_index('ix_plan_testcases_testcase_id', table_name='plan_testcases')
     op.drop_index('ix_plan_testcases_plan_id', table_name='plan_testcases')

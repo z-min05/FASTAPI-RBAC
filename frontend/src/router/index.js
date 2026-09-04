@@ -57,6 +57,12 @@ const routes = [
         meta: { title: '操作日志', icon: 'FileTextOutlined' }
       },
       {
+        path: 'system/api-keys',
+        name: 'ApiKeyManage',
+        component: () => import('@/pages/ApiKeyManage.vue'),
+        meta: { title: 'API 密钥', icon: 'KeyOutlined' }
+      },
+      {
         path: 'test/projects',
         name: 'ProjectManage',
         component: () => import('@/pages/test/ProjectManage.vue'),

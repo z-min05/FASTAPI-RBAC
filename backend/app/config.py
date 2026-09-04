@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:123456@localhost:5432/fastapi_rbac"
 
     # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
+    # 注意：Windows 下 Redis 通常只监听 IPv4，用 localhost 会先解析到 ::1 导致连接超时
+    REDIS_URL: str = "redis://127.0.0.1:6379/0"
 
     # JWT
     SECRET_KEY: str

@@ -14,6 +14,7 @@ from app.models.agent_message import AgentMessage
 from app.models.agent_token_record import AgentTokenRecord
 from app.models.agent_llm import AgentLlm
 from app.models.agent_definition import AgentDefinition
+from app.models.api_key import ApiKey
 
 __all__ = [
     "User",
@@ -34,4 +35,5 @@ __all__ = [
     "AgentTokenRecord",
     "AgentLlm",
     "AgentDefinition",
+    "ApiKey",
 ]

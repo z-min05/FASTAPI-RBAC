@@ -1,5 +1,7 @@
 import os
 
+import csv
+import io
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -455,3 +457,46 @@ class PlanService:
             {"id": u.id, "username": u.username, "nickname": u.nickname or u.username}
             for u in result.scalars().all()
         ]
+
+    # ---------- 导出 ----------
+
+    async def export_plan_testcases(self, plan_id: int) -> str:
+        """导出计划用例为 CSV 文本（UTF-8 BOM）"""
+        plan = await self.get_plan(plan_id)
+        stmt = (
+            select(PlanTestCase)
+            .where(PlanTestCase.plan_id == plan.id)
+            .order_by(PlanTestCase.id)
+        )
+        result = await self.db.execute(stmt)
+        pts = list(result.scalars().all())
+        tc_ids = [pt.testcase_id for pt in pts]
+        user_ids = [pt.tester_id for pt in pts if pt.tester_id]
+        tc_map = await self._get_testcase_map(tc_ids)
+        user_map = await self._get_user_map(user_ids)
+
+        buf = io.StringIO()
+        buf.write("\ufeff")
+        writer = csv.writer(buf)
+        writer.writerow([
+            "用例标题", "模块", "优先级", "用例类型",
+            "前置条件", "测试步骤", "预期结果",
+            "测试人", "结果", "结果描述",
+        ])
+        for pt in pts:
+            tc = tc_map.get(pt.testcase_id)
+            user = user_map.get(pt.tester_id) if pt.tester_id else None
+            _result_label = {"pass": "通过", "fail": "失败", "blocked": "阻塞", "skipped": "跳过", "running": "执行中"}.get(pt.result or "", pt.result or "")
+            writer.writerow([
+                tc.title if tc else "",
+                tc.module if tc else "",
+                tc.priority if tc else "",
+                tc.case_type if tc else "",
+                tc.precondition or "",
+                tc.steps or "",
+                tc.expected_result if tc else "",
+                (user.nickname or user.username) if user else "",
+                _result_label,
+                pt.result_desc or "",
+            ])
+        return buf.getvalue()

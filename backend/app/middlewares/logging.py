@@ -1,6 +1,7 @@
 import time
 import json
 import re
+import hashlib
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from sqlalchemy import select
@@ -8,6 +9,7 @@ from app.utils.logger import logger
 from app.security import decode_token
 from app.db.session import AsyncSessionLocal
 from app.models.operation_log import OperationLog
+from app.models.api_key import ApiKey
 from app.models.user import User
 from jose import JWTError
 
@@ -15,6 +17,10 @@ from jose import JWTError
 AUTH_EXCLUDED_SUFFIXES = ("/auth/login", "/auth/register")
 # 请求体中密码类字段一律脱敏，避免明文入库
 _SENSITIVE_RE = re.compile(r'"(?:"?password|old_password|new_password|confirm_password)"?\s*:\s*"', re.IGNORECASE)
+# 响应/请求体中可能出现明文密钥/令牌的字段名（键名包含即脱敏，值仅限字符串）
+_SENSITIVE_KEY_RE = re.compile(
+    r"password|full_key|api_key|key_hash|secret|access_token|refresh_token|token", re.IGNORECASE
+)
 
 
 def _mask_sensitive(body: str | None) -> str | None:
@@ -37,6 +43,77 @@ def _mask_sensitive(body: str | None) -> str | None:
         return obj
 
     return json.dumps(walk(data), ensure_ascii=False)
+
+
+def _mask_secret_values(content: str | None) -> str | None:
+    """将 JSON 文本中密钥/令牌类字段的字符串值替换为 ***。
+
+    仅用于日志落库：响应体仍需原样返回给客户端（如创建成功需展示完整密钥），
+    因此脱敏发生在写入 operation_logs 之前，不影响返回给前端的原始内容。
+    """
+    if not content:
+        return content
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return content
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            return {
+                k: ("***" if isinstance(v, str) and _SENSITIVE_KEY_RE.search(k) else walk(v))
+                for k, v in obj.items()
+            }
+        if isinstance(obj, list):
+            return [walk(item) for item in obj]
+        return obj
+
+    return json.dumps(walk(data), ensure_ascii=False)
+
+
+async def _resolve_operator(auth_header: str, db) -> tuple[int | None, str | None]:
+    """解析请求操作者身份，返回 (user_id, 显示名)。
+
+    - JWT（登录用户）：真实 user_id + 用户名
+    - API Key（sk- 前缀）：user_id 存负值 -(api_key.id)（与虚拟用户约定一致，
+      operation_logs.user_id 无外键可存），显示名形如 "API密钥(密钥名)"
+    - 无法识别：None, None（仍会落库一条匿名记录）
+    """
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None, None
+    token = auth_header[len("Bearer "):].strip()
+    if not token:
+        return None, None
+
+    # API Key 识别
+    if token.startswith("sk-"):
+        key_hash = hashlib.sha256(token.encode()).hexdigest()
+        result = await db.execute(
+            select(ApiKey.id, ApiKey.name).where(
+                ApiKey.key_hash == key_hash,
+                ApiKey.is_active == True,
+            )
+        )
+        row = result.first()
+        if row:
+            return -(row[0]), f"API密钥({row[1]})"[:50]
+        return None, None
+
+    # JWT 识别
+    try:
+        payload = decode_token(token)
+    except JWTError:
+        return None, None
+    if payload.get("type") != "access":
+        return None, None
+    user_id = payload.get("sub")
+    if user_id is None:
+        return None, None
+    username_result = await db.execute(
+        select(User.username).where(User.id == int(user_id))
+    )
+    username = username_result.scalar_one_or_none()
+    return int(user_id), username
 
 
 class LoggingMiddleware(BaseHTTPMiddleware):
@@ -67,18 +144,6 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 
         # 登录/注册等含明文凭据的接口不进入操作日志
         exclude_audit = path.endswith(AUTH_EXCLUDED_SUFFIXES)
-
-        # 从 JWT 获取用户 ID（不再查数据库获取用户名）
-        user_id = None
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-            try:
-                payload = decode_token(token)
-                if payload.get("type") == "access":
-                    user_id = payload.get("sub")
-            except JWTError:
-                pass
 
         # 捕获响应体
         response_body = None
@@ -125,15 +190,12 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         if request.method != "GET" and not exclude_audit:
             try:
                 async with AsyncSessionLocal() as db:
-                    # 回填用户名，保证审计日志能正确记录操作人
-                    username = None
-                    if user_id is not None:
-                        result = await db.execute(
-                            select(User.username).where(User.id == int(user_id))
-                        )
-                        username = result.scalar_one_or_none()
+                    # 解析操作者身份：JWT 用户 或 API 密钥（负数 user_id + 显示名）
+                    user_id, username = await _resolve_operator(
+                        request.headers.get("authorization", ""), db
+                    )
                     log_entry = OperationLog(
-                        user_id=int(user_id) if user_id else None,
+                        user_id=user_id,
                         username=username,
                         method=request.method,
                         path=path,
@@ -143,7 +205,8 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                         user_agent=request.headers.get("user-agent", "")[:255],
                         duration=duration,
                         message=f"{request.method} {path} -> {response.status_code}",
-                        response=response_body,
+                        # 响应体落库前脱敏，防止 full_key 等明文密钥进入审计日志
+                        response=_mask_secret_values(response_body),
                     )
                     db.add(log_entry)
                     await db.commit()

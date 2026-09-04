@@ -71,6 +71,10 @@
         >
           停止执行
         </a-button>
+        <a-button @click="handleExport">
+          <template #icon><DownloadOutlined /></template>
+          导出
+        </a-button>
       </a-space>
     </div>
 
@@ -103,7 +107,7 @@
           {{ formatDate(record.updated_at) }}
         </template>
         <template v-if="column.key === 'action'">
-          <a-space wrap>
+          <a-space>
             <a-button type="link" size="small" @click="openCaseDetail(record)">查看</a-button>
             <a-button v-if="record.module_code && record.case_code" type="link" size="small" :disabled="record.result === 'running'" @click="handleExecute(record)" v-permission="'plan:case:execute'">执行</a-button>
             <a-button type="link" size="small" @click="openResultModal(record)" v-permission="'plan:case:result'">记录结果</a-button>
@@ -260,7 +264,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { PlusOutlined, ArrowLeftOutlined, EditOutlined } from '@ant-design/icons-vue'
+import { PlusOutlined, ArrowLeftOutlined, EditOutlined, DownloadOutlined } from '@ant-design/icons-vue'
 import {
   getPlan,
   updatePlan,
@@ -272,7 +276,8 @@ import {
   removePlanTestcase,
   executePlanTestcase,
   batchExecutePlanTestcases,
-  stopPlanExecution
+  stopPlanExecution,
+  exportPlanTestcases
 } from '@/api/plan'
 import { useAuthStore } from '@/stores/auth'
 import dayjs from 'dayjs'
@@ -410,9 +415,9 @@ const columns = [
   { title: '来源', dataIndex: 'source', key: 'source', width: 110, ellipsis: true },
   { title: '测试人', dataIndex: 'tester_name', key: 'tester', width: 120 },
   { title: '结果', dataIndex: 'result', key: 'result', width: 90 },
-  { title: '结果描述', dataIndex: 'result_desc', key: 'result_desc', width: 200, ellipsis: true },
+  { title: '结果描述', dataIndex: 'result_desc', key: 'result_desc', width: 120, ellipsis: true },
   { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 170 },
-  { title: '操作', key: 'action', width: 230, fixed: 'right' }
+  { title: '操作', key: 'action', width: 260, fixed: 'right' }
 ]
 
 const tableData = ref([])
@@ -455,6 +460,19 @@ function handleTableChange(pag) {
   pagination.current = pag.current
   pagination.pageSize = pag.pageSize
   loadTestcases()
+}
+
+async function handleExport() {
+  const blob = await exportPlanTestcases(planId)
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `plan_${planId}_testcases.csv`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  window.URL.revokeObjectURL(url)
+  message.success('导出成功')
 }
 
 async function loadTesterOptions() {

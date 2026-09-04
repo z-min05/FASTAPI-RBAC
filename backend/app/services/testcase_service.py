@@ -156,9 +156,15 @@ class TestCaseService:
 
     async def create_testcase(self, data: TestCaseCreate) -> TestCase:
         project = await self._ensure_project_active(data.project_id)
-        validate_codes(data.module_code, data.case_code)
-        await self._check_uniqueness(data.project_id, data.module_code, data.case_code)
-        tc = TestCase(**data.model_dump())
+        # 空字符串转为 None，避免与数据库条件唯一索引冲突
+        module_code = data.module_code or None
+        case_code = data.case_code or None
+        validate_codes(module_code, case_code)
+        await self._check_uniqueness(data.project_id, module_code, case_code)
+        raw = data.model_dump()
+        raw["module_code"] = module_code
+        raw["case_code"] = case_code
+        tc = TestCase(**raw)
         created = await self.testcase_repo.create(tc)
         # 尝试生成自动化文件
         await self._generate_auto_file(project, created)
@@ -170,8 +176,13 @@ class TestCaseService:
             raise NotFoundException("用例不存在")
         update_data = data.model_dump(exclude_unset=True)
         new_project_id = update_data.get("project_id")
-        new_module_code = update_data.get("module_code", tc.module_code)
-        new_case_code = update_data.get("case_code", tc.case_code)
+        # 空字符串转为 None，避免条件唯一索引冲突
+        new_module_code = update_data.pop("module_code", tc.module_code)
+        new_module_code = new_module_code or None
+        new_case_code = update_data.pop("case_code", tc.case_code)
+        new_case_code = new_case_code or None
+        update_data["module_code"] = new_module_code
+        update_data["case_code"] = new_case_code
         project = None
         if new_project_id is not None and new_project_id != tc.project_id:
             project = await self._ensure_project_active(new_project_id)

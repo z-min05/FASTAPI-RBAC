@@ -22,6 +22,10 @@ request.interceptors.request.use(
 // 响应拦截器
 request.interceptors.response.use(
   (response) => {
+    // 如果是 blob 响应（文件下载），直接返回数据，跳过 JSON 解析
+    if (response.config.responseType === 'blob') {
+      return response.data
+    }
     const res = response.data
     if (res.code !== 200) {
       message.error(res.message || '请求失败')
