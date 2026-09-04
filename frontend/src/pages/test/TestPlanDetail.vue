@@ -197,16 +197,6 @@
         <a-form-item label="用例标题">
           <span class="case-title">{{ resultForm.title }}</span>
         </a-form-item>
-        <a-form-item label="测试人">
-          <a-select
-            v-model:value="resultForm.tester_id"
-            placeholder="请选择测试人"
-            style="width: 100%"
-            show-search
-            option-filter-prop="label"
-            :options="testerOptions"
-          />
-        </a-form-item>
         <a-form-item label="测试结果" required>
           <a-radio-group v-model:value="resultForm.result" button-style="solid">
             <a-radio-button v-for="r in resultOptions" :key="r.value" :value="r.value">
@@ -554,13 +544,12 @@ async function handleAddCases() {
 // ---------- 记录结果 ----------
 const resultModalVisible = ref(false)
 const resultSaving = ref(false)
-const resultForm = reactive({ ptc_id: null, title: '', tester_id: null, result: null, result_desc: '' })
+const resultForm = reactive({ ptc_id: null, title: '', result: null, result_desc: '' })
 
 function openResultModal(record) {
   Object.assign(resultForm, {
     ptc_id: record.id,
     title: record.title,
-    tester_id: record.tester_id ?? authStore.userInfo?.id ?? null,
     result: record.result || null,
     result_desc: record.result_desc || ''
   })
@@ -575,7 +564,6 @@ async function handleSaveResult() {
   resultSaving.value = true
   try {
     await updatePlanTestcaseResult(planId, resultForm.ptc_id, {
-      tester_id: resultForm.tester_id,
       result: resultForm.result,
       result_desc: resultForm.result_desc
     })

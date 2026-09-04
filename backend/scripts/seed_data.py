@@ -223,21 +223,29 @@ AGENT_MENUS = [
     },
 ]
 
-# 旧版本遗留、已废弃的权限/菜单（升级时幂等清理）
-# 注意：agent:llm 为上一版“单一管理权限”，本次升级替换为 agent:llm:* 细粒度
-AGENT_OBSOLETE_PERMISSION_CODES = {"agent:chat", "agent:delete", "agent:stats", "agent:llm"}
-AGENT_OBSOLETE_MENU_PATHS = {"/agent/chat", "/agent/manage"}
+AGENT_MENUS = [
+    {
+        "name": "AI 助手", "path": "/agent", "icon": "RobotOutlined",
+        "menu_type": "directory", "sort": 4, "visible": True,
+        "children": [
+            {
+                "name": "LLM 配置", "path": "/agent/llms", "component": "agent/LlmManage",
+                "icon": "ApiOutlined", "menu_type": "menu", "sort": 1,
+                "permission": "agent:llm:list", "visible": True,
+                "children": [
+                    {"name": "新增 LLM", "menu_type": "button", "permission": "agent:llm:create", "sort": 1},
+                    {"name": "编辑 LLM", "menu_type": "button", "permission": "agent:llm:update", "sort": 2},
+                    {"name": "删除 LLM", "menu_type": "button", "permission": "agent:llm:delete", "sort": 3},
+                ],
+            },
+        ],
+    },
+]
 
 
 async def _ensure_agent_module(db):
-    """幂等创建 AI 助手模块数据，并清理旧版本废弃的权限/菜单/授权。
-
-    - 权限：LLM 配置按 agent:llm:list/detail/create/update/delete 细粒度授权
-    - 菜单：目录 /agent 下仅保留 LLM 配置（含 新增/编辑/删除 按钮）
-    - 角色：admin 全部；user 默认仅 list/detail（只读）与非按钮菜单，
-      其余动作通过 RBAC 分配（与测试管理模块一致）
-    """
-    # 1. 权限：新增 agent:llm:*；删除废弃权限（agent:chat/agent:delete/agent:stats/agent:llm）
+    """幂等创建 AI 助手模块的权限、菜单（含按钮）与角色授权。"""
+    # 1. 权限
     perm_objs = {}
     for p in AGENT_PERMISSIONS:
         result = await db.execute(select(Permission).where(Permission.code == p["code"]))
@@ -247,15 +255,6 @@ async def _ensure_agent_module(db):
             db.add(perm)
             await db.flush()
         perm_objs[p["code"]] = perm
-
-    if AGENT_OBSOLETE_PERMISSION_CODES:
-        obsolete_perms = (
-            await db.execute(
-                select(Permission).where(Permission.code.in_(AGENT_OBSOLETE_PERMISSION_CODES))
-            )
-        ).scalars().all()
-        for p in obsolete_perms:
-            await db.delete(p)
 
     # 2. 菜单（目录 /agent -> LLM 配置 menu -> 新增/编辑/删除 按钮）
     module_menus = []
@@ -280,7 +279,6 @@ async def _ensure_agent_module(db):
                 db.add(menu)
                 await db.flush()
             elif menu.permission != menu_def["permission"]:
-                # 升级场景：旧行 permission 是 agent:chat/agent:llm，统一改为 agent:llm:list
                 menu.permission = menu_def["permission"]
             module_menus.append(menu)
 
@@ -304,30 +302,7 @@ async def _ensure_agent_module(db):
                     btn.permission = btn_def["permission"]
                 module_menus.append(btn)
 
-    # 3. 清理旧菜单：Agent 对话(/agent/chat)、我的 Agent(/agent/manage)、旧按钮
-    if AGENT_OBSOLETE_MENU_PATHS:
-        old_menus = (
-            await db.execute(
-                select(Menu).where(
-                    Menu.menu_type == "menu", Menu.path.in_(AGENT_OBSOLETE_MENU_PATHS)
-                )
-            )
-        ).scalars().all()
-        for m in old_menus:
-            await db.delete(m)
-    if AGENT_OBSOLETE_PERMISSION_CODES:
-        old_buttons = (
-            await db.execute(
-                select(Menu).where(
-                    Menu.menu_type == "button",
-                    Menu.permission.in_(AGENT_OBSOLETE_PERMISSION_CODES),
-                )
-            )
-        ).scalars().all()
-        for b in old_buttons:
-            await db.delete(b)
-
-    # 4. 角色授权（admin 全部；user 仅 :list/:detail 只读权限 + 非按钮菜单）
+    # 3. 角色授权（admin 全部；user 仅 :list/:detail 只读权限 + 非按钮菜单）
     admin_role = (await db.execute(select(Role).where(Role.code == "admin"))).scalar_one_or_none()
     user_role = (await db.execute(select(Role).where(Role.code == "user"))).scalar_one_or_none()
 
@@ -659,17 +634,5 @@ async def seed():
         await _sync_casbin(db)
 
 
-async def reset_and_seed():
-    """清空数据库并重新初始化（危险操作！）"""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        print("已清空所有表")
-    await seed()
-
-
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "--reset":
-        asyncio.run(reset_and_seed())
-    else:
-        asyncio.run(seed())
+    asyncio.run(seed())

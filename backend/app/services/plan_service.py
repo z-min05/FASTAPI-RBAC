@@ -248,10 +248,9 @@ class PlanService:
         ptc_id: int,
         result: str | None,
         result_desc: str | None,
-        tester_id: int | None,
         current_user: User,
     ) -> PlanTestCase:
-        """记录/修改测试结果；tester_id 缺省时回填当前用户（已有测试人则保留）"""
+        """记录/修改测试结果，测试人直接设为当前用户"""
         plan = await self.get_plan(plan_id)
         pt = await self.pt_repo.get_by_id(ptc_id)
         if not pt or pt.plan_id != plan.id:
@@ -264,8 +263,7 @@ class PlanService:
             updates["result"] = result
         if result_desc is not None:
             updates["result_desc"] = result_desc
-        new_tester = tester_id if tester_id is not None else (pt.tester_id or current_user.id)
-        updates["tester_id"] = new_tester
+        updates["tester_id"] = current_user.id
         updated = await self.pt_repo.update(pt.id, updates)
         return updated
 

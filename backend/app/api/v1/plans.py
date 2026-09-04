@@ -144,7 +144,6 @@ async def update_result(
         ptc_id,
         data.result,
         data.result_desc,
-        data.tester_id,
         current_user,
     )
     return Response.success(message="结果已保存")

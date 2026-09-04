@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     AGENT_ENABLED: bool = False
     AGENT_INVOKE_TIMEOUT: int = 180
 
+    # ==================== 加密（api_key 敏感字段） ====================
+    # 用于 Fernet 对称加密；生产环境务必更换为随机 base64 字符串（32 bytes url-safe base64）。
+    ENCRYPTION_KEY: str = "D4GbYVEXicX0l9ckg9UwP1LavrUEfkgJex5yJRx4T_s="
+
     @property
     def cors_origins_list(self) -> List[str]:
         return json.loads(self.CORS_ORIGINS)

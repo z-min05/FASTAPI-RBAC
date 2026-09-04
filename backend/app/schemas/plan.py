@@ -70,10 +70,9 @@ class PlanTestcaseAddRequest(BaseModel):
 
 
 class PlanTestcaseResultUpdate(BaseModel):
-    """记录/修改测试结果（tester_id 缺省由后端回填当前用户）"""
+    """记录/修改测试结果（测试人由后端自动设为当前用户）"""
     result: str | None = None
     result_desc: str | None = None
-    tester_id: int | None = None
 
 
 class TesterOption(BaseModel):
