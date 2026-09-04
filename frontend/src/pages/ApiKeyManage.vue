@@ -298,3 +298,9 @@ onMounted(() => {
   loadData()
 })
 </script>
+
+<style scoped>
+.page-header {
+  margin-bottom: 16px;
+}
+</style>
