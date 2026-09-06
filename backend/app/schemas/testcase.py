@@ -21,6 +21,8 @@ class TestCaseBase(BaseModel):
     expected_result: str = Field(..., min_length=1)
     status: str = Field("draft")
     tags: str | None = Field(None, max_length=200)
+    module_code: str | None = Field(None, max_length=100, description="模块编码（pytest 文件名，不含 .py，需以 test_ 开头）")
+    case_code: str | None = Field(None, max_length=100, description="用例编码（pytest 函数名，需以 test_ 开头）")
 
 
 class TestCaseCreate(TestCaseBase):
@@ -39,6 +41,8 @@ class TestCaseUpdate(BaseModel):
     expected_result: str | None = Field(None, min_length=1)
     status: str | None = None
     tags: str | None = None
+    module_code: str | None = None
+    case_code: str | None = None
 
 
 class TestCaseResponse(BaseModel):
@@ -57,5 +61,7 @@ class TestCaseResponse(BaseModel):
     expected_result: str
     status: str
     tags: str | None = None
+    module_code: str | None = None
+    case_code: str | None = None
     created_at: datetime
     updated_at: datetime

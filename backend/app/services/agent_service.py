@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import runtime as agent_runtime
 from app.agent.config import get_agent_config
+from app.core.crypto_util import decrypt, encrypt
 from app.core.pagination import PaginationParams
 from app.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.models.agent_conversation import AgentConversation
@@ -39,12 +40,10 @@ from app.utils.logger import logger
 
 
 def mask_api_key(api_key: Optional[str]) -> str:
-    """api_key 掩码（不回显原始值）。"""
+    """api_key 掩码（密文存储，不展示原始值）。"""
     if not api_key:
         return ""
-    if len(api_key) <= 8:
-        return "****"
-    return f"{api_key[:6]}****{api_key[-4:]}"
+    return "****"
 
 
 # ==================== 配置快照与指纹 ====================
@@ -104,7 +103,7 @@ def _compose_spec(agent: AgentDefinition, llm: AgentLlm, current_hash: str) -> d
             "provider": llm.provider,
             "model": llm.model,
             "base_url": llm.base_url,
-            "api_key": llm.api_key,
+            "api_key": decrypt(llm.api_key),
             "temperature": llm.temperature,
             "max_tokens": llm.max_tokens,
             "timeout": llm.timeout,
@@ -204,7 +203,7 @@ class AgentLlmService:
             provider=data.provider,
             model=data.model,
             base_url=data.base_url,
-            api_key=data.api_key,
+            api_key=encrypt(data.api_key),
             temperature=data.temperature,
             max_tokens=data.max_tokens,
             timeout=data.timeout,
@@ -235,7 +234,7 @@ class AgentLlmService:
         if data.base_url is not None:
             llm.base_url = data.base_url
         if data.api_key:
-            llm.api_key = data.api_key
+            llm.api_key = encrypt(data.api_key)
         if data.temperature is not None:
             llm.temperature = data.temperature
         if data.max_tokens is not None:

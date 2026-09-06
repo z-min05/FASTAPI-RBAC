@@ -8,7 +8,10 @@ from app.api.v1.departments import router as departments_router
 from app.api.v1.logs import router as logs_router
 from app.api.v1.projects import router as projects_router
 from app.api.v1.testcases import router as testcases_router
+from app.api.v1.plans import router as plans_router
 from app.api.v1.agent import router as agent_router
+from app.api.v1.dashboard import router as dashboard_router
+from app.api.v1.api_keys import router as api_keys_router
 
 router = APIRouter()
 
@@ -21,4 +24,7 @@ router.include_router(departments_router)
 router.include_router(logs_router)
 router.include_router(projects_router)
 router.include_router(testcases_router)
+router.include_router(plans_router)
 router.include_router(agent_router)
+router.include_router(dashboard_router)
+router.include_router(api_keys_router)

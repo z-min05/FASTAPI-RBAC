@@ -48,8 +48,8 @@
         <template v-if="column.key === 'action'">
           <a-space>
             <a-button type="link" size="small" @click="showModal(record)" v-permission="'agent:llm:update'">编辑</a-button>
-            <a-popconfirm title="确定删除该 LLM 配置？" @confirm="handleDelete(record)" v-permission="'agent:llm:delete'">
-              <a-button type="link" size="small" danger>删除</a-button>
+            <a-popconfirm title="确定删除该 LLM 配置？" @confirm="handleDelete(record)">
+              <a-button type="link" size="small" danger v-permission="'agent:llm:delete'">删除</a-button>
             </a-popconfirm>
           </a-space>
         </template>

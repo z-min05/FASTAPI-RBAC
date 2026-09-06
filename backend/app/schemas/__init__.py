@@ -9,3 +9,4 @@ from app.schemas.common import *
 from app.schemas.project import *
 from app.schemas.testcase import *
 from app.schemas.agent import *
+from app.schemas.api_key import *

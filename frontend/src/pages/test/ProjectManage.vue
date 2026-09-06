@@ -85,13 +85,19 @@
         <a-form-item label="状态">
           <a-switch v-model:checked="formState.is_active" checked-children="启用" un-checked-children="停用" />
         </a-form-item>
+        <a-form-item label="自动化根路径">
+          <a-input v-model:value="formState.auto_root_path" placeholder="pytest 用例目录绝对路径，如 D:\zzm\pytestProject\tests" />
+        </a-form-item>
+        <a-form-item label="Python 路径">
+          <a-input v-model:value="formState.python_path" placeholder="Python 解释器路径，如 python 或 D:\anaconda3\python.exe" />
+        </a-form-item>
       </a-form>
     </a-modal>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { getProjects, createProject, updateProject, deleteProject, getOwnerOptions } from '@/api/project'
@@ -104,21 +110,33 @@ const isEdit = ref(false)
 const editId = ref(null)
 const searchText = ref('')
 const statusFilter = ref(null)
+// 创建时间排序：默认倒序（最新创建在前）
+const order = ref('desc')
 const statusOptions = [
   { label: '启用', value: true },
   { label: '停用', value: false }
 ]
 
-const columns = [
+const columns = computed(() => [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
   { title: '编码', dataIndex: 'code', key: 'code', width: 120 },
   { title: '名称', dataIndex: 'name', key: 'name' },
   { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
   { title: '负责人', dataIndex: 'owner_id', key: 'owner', width: 120 },
   { title: '状态', dataIndex: 'is_active', key: 'is_active', width: 80 },
-  { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180 },
+  {
+    title: '创建时间',
+    dataIndex: 'created_at',
+    key: 'created_at',
+    width: 180,
+    sorter: true,
+    sortDirections: ['descend', 'ascend'],
+    sortOrder: order.value === 'asc' ? 'ascend' : 'descend'
+  },
+  { title: '自动化根路径', dataIndex: 'auto_root_path', key: 'auto_root_path', ellipsis: true, width: 200 },
+  { title: 'Python 路径', dataIndex: 'python_path', key: 'python_path', ellipsis: true, width: 200 },
   { title: '操作', key: 'action', width: 140, fixed: 'right' }
-]
+])
 
 const tableData = ref([])
 const pagination = reactive({
@@ -157,7 +175,9 @@ const formState = reactive({
   name: '',
   description: '',
   owner_id: null,
-  is_active: true
+  is_active: true,
+  auto_root_path: '',
+  python_path: ''
 })
 
 function formatDate(val) {
@@ -171,7 +191,7 @@ function onSelectChange(keys) {
 async function loadData() {
   loading.value = true
   try {
-    const params = { page: pagination.current, page_size: pagination.pageSize }
+    const params = { page: pagination.current, page_size: pagination.pageSize, order: order.value }
     if (searchText.value) params.keyword = searchText.value
     if (statusFilter.value !== null && statusFilter.value !== undefined) params.is_active = statusFilter.value
     const res = await getProjects(params)
@@ -189,9 +209,13 @@ function handleReset() {
   loadData()
 }
 
-function handleTableChange(pag) {
+function handleTableChange(pag, _filters, sorter) {
   pagination.current = pag.current
   pagination.pageSize = pag.pageSize
+  // 排序切换时回到第一页；取消排序（第三下）回到默认倒序
+  const next = sorter && sorter.order ? (sorter.order === 'ascend' ? 'asc' : 'desc') : 'desc'
+  if (next !== order.value) pagination.current = 1
+  order.value = next
   loadData()
 }
 
@@ -204,7 +228,9 @@ function showModal(record) {
       name: record.name,
       description: record.description || '',
       owner_id: record.owner_id,
-      is_active: record.is_active
+      is_active: record.is_active,
+      auto_root_path: record.auto_root_path || '',
+      python_path: record.python_path || ''
     })
   } else {
     editId.value = null
@@ -213,7 +239,9 @@ function showModal(record) {
       name: '',
       description: '',
       owner_id: null,
-      is_active: true
+      is_active: true,
+      auto_root_path: '',
+      python_path: ''
     })
   }
   modalVisible.value = true

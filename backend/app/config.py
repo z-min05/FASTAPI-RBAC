@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:123456@localhost:5432/fastapi_rbac"
 
     # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
+    # 注意：Windows 下 Redis 通常只监听 IPv4，用 localhost 会先解析到 ::1 导致连接超时
+    REDIS_URL: str = "redis://127.0.0.1:6379/0"
 
     # JWT
     SECRET_KEY: str
@@ -35,6 +36,10 @@ class Settings(BaseSettings):
     # 仅保留总开关与单轮推理超时。
     AGENT_ENABLED: bool = False
     AGENT_INVOKE_TIMEOUT: int = 180
+
+    # ==================== 加密（api_key 敏感字段） ====================
+    # 用于 Fernet 对称加密；生产环境务必更换为随机 base64 字符串（32 bytes url-safe base64）。
+    ENCRYPTION_KEY: str = "D4GbYVEXicX0l9ckg9UwP1LavrUEfkgJex5yJRx4T_s="
 
     @property
     def cors_origins_list(self) -> List[str]:

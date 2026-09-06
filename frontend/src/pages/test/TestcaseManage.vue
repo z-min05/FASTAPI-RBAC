@@ -16,6 +16,7 @@
           style="width: 140px"
           allow-clear
           :options="moduleOptions"
+          @change="onFilterChange"
         />
         <a-select
           v-model:value="filters.priority"
@@ -23,6 +24,7 @@
           style="width: 110px"
           allow-clear
           :options="priorityOptions"
+          @change="onFilterChange"
         />
         <a-select
           v-model:value="filters.status"
@@ -30,12 +32,14 @@
           style="width: 120px"
           allow-clear
           :options="statusOptions"
+          @change="onFilterChange"
         />
         <a-input-search
           v-model:value="filters.keyword"
           placeholder="标题/模块关键字"
           style="width: 200px"
           @search="handleSearch"
+          @change="onKeywordChange"
           allow-clear
         />
         <a-button @click="handleReset">重置</a-button>
@@ -101,6 +105,8 @@
         <a-descriptions-item label="前置条件" :span="2"><span style="white-space: pre-wrap">{{ detail.precondition || '-' }}</span></a-descriptions-item>
         <a-descriptions-item label="测试步骤" :span="2"><span style="white-space: pre-wrap">{{ detail.steps || '-' }}</span></a-descriptions-item>
         <a-descriptions-item label="预期结果" :span="2"><span style="white-space: pre-wrap">{{ detail.expected_result }}</span></a-descriptions-item>
+        <a-descriptions-item label="模块编码">{{ detail.module_code || '-' }}</a-descriptions-item>
+        <a-descriptions-item label="用例编码">{{ detail.case_code || '-' }}</a-descriptions-item>
       </a-descriptions>
     </a-modal>
 
@@ -183,6 +189,13 @@
         <a-form-item label="标签">
           <a-input v-model:value="formState.tags" placeholder="逗号分隔的覆盖点关键词" />
         </a-form-item>
+        <a-divider>自动化生成（可选）</a-divider>
+        <a-form-item label="模块编码">
+          <a-input v-model:value="formState.module_code" placeholder="pytest 文件名，如 test_device_comm_log（需以 test_ 开头）" />
+        </a-form-item>
+        <a-form-item label="用例编码">
+          <a-input v-model:value="formState.case_code" placeholder="pytest 函数名，如 test_list_columns（需以 test_ 开头）" />
+        </a-form-item>
       </a-form>
       <div class="drawer-footer">
         <a-space>
@@ -195,7 +208,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, h, onMounted } from 'vue'
+import { ref, reactive, computed, h, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined, UploadOutlined, DownloadOutlined } from '@ant-design/icons-vue'
 import {
@@ -248,7 +261,10 @@ const filters = reactive({
   keyword: ''
 })
 
-const columns = [
+// 创建时间排序：默认倒序（最新创建在前）
+const order = ref('desc')
+
+const columns = computed(() => [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
   { title: '标题', dataIndex: 'title', key: 'title', ellipsis: true },
   { title: '项目', key: 'project', width: 120 },
@@ -257,9 +273,17 @@ const columns = [
   { title: '类型', dataIndex: 'case_type', key: 'case_type', width: 80 },
   { title: '状态', dataIndex: 'status', key: 'status', width: 80 },
   { title: '来源', dataIndex: 'source', key: 'source', width: 100, ellipsis: true },
-  { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 170 },
+  {
+    title: '创建时间',
+    dataIndex: 'created_at',
+    key: 'created_at',
+    width: 170,
+    sorter: true,
+    sortDirections: ['descend', 'ascend'],
+    sortOrder: order.value === 'asc' ? 'ascend' : 'descend'
+  },
   { title: '操作', key: 'action', width: 160, fixed: 'right' }
-]
+])
 
 const tableData = ref([])
 const pagination = reactive({
@@ -283,7 +307,9 @@ const formState = reactive({
   steps: '',
   expected_result: '',
   status: 'draft',
-  tags: ''
+  tags: '',
+  module_code: '',
+  case_code: ''
 })
 
 function priorityColor(p) {
@@ -311,7 +337,7 @@ function onSelectChange(keys) {
 }
 
 function buildQueryParams() {
-  const params = { page: pagination.current, page_size: pagination.pageSize }
+  const params = { page: pagination.current, page_size: pagination.pageSize, order: order.value }
   if (filters.project_id) params.project_id = filters.project_id
   if (filters.module) params.module = filters.module
   if (filters.priority) params.priority = filters.priority
@@ -336,9 +362,16 @@ async function loadProjects() {
   try {
     const res = await getAllProjects()
     projectOptions.value = (res.data || []).map(p => ({ label: p.name, value: p.id }))
+    // 有项目时默认选中第一个项目进行筛选；没有任何项目时才不选择
+    if (!filters.project_id && projectOptions.value.length) {
+      filters.project_id = projectOptions.value[0].value
+      filters.module = null
+    }
   } catch (e) {
     projectOptions.value = []
   }
+  loadModules()
+  loadData()
 }
 
 async function loadModules() {
@@ -352,8 +385,26 @@ async function loadModules() {
 }
 
 function onProjectChange() {
+  // 切换/清空项目：重置模块并立即按当前筛选刷新
   filters.module = null
+  pagination.current = 1
   loadModules()
+  loadData()
+}
+
+// 下拉框（模块/优先级/状态）选中即筛选；点 x 清空即移除该筛选，均立即刷新
+function onFilterChange() {
+  pagination.current = 1
+  loadData()
+}
+
+// 关键字搜索框：仅清空（点击 x）时立即生效，输入内容需按回车/点查询触发
+function onKeywordChange(e) {
+  const value = e && e.target ? e.target.value : e
+  if (!value) {
+    pagination.current = 1
+    loadData()
+  }
 }
 
 function handleSearch() {
@@ -368,9 +419,13 @@ function handleReset() {
   loadData()
 }
 
-function handleTableChange(pag) {
+function handleTableChange(pag, _filters, sorter) {
   pagination.current = pag.current
   pagination.pageSize = pag.pageSize
+  // 排序切换时回到第一页；取消排序（第三下）回到默认倒序
+  const next = sorter && sorter.order ? (sorter.order === 'ascend' ? 'asc' : 'desc') : 'desc'
+  if (next !== order.value) pagination.current = 1
+  order.value = next
   loadData()
 }
 
@@ -389,7 +444,9 @@ function showForm(record) {
       steps: record.steps || '',
       expected_result: record.expected_result,
       status: record.status,
-      tags: record.tags || ''
+      tags: record.tags || '',
+      module_code: record.module_code || '',
+      case_code: record.case_code || ''
     })
   } else {
     editId.value = null
@@ -404,7 +461,9 @@ function showForm(record) {
       steps: '',
       expected_result: '',
       status: 'draft',
-      tags: ''
+      tags: '',
+      module_code: '',
+      case_code: ''
     })
   }
   formVisible.value = true
@@ -554,9 +613,8 @@ async function handleExport() {
 }
 
 onMounted(() => {
-  loadData()
+  // 进入页面时默认选中第一个项目（若有）并按项目加载模块与列表
   loadProjects()
-  loadModules()
 })
 </script>
 

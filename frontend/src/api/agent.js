@@ -69,27 +69,37 @@ export function sendAgentMessageStream(conversationId, content, { onEvent, signa
         const decoder = new TextDecoder('utf-8')
         let buffer = ''
 
+        // 解析一行 SSE data；无法解析的行静默跳过
+        const handleLine = (line) => {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith('data:')) return
+          const payload = trimmed.slice(5).trim()
+          if (!payload) return
+          try {
+            if (onEvent) onEvent(JSON.parse(payload))
+          } catch (e) {
+            /* 忽略无法解析的行 */
+          }
+        }
+
         const pump = () =>
           reader.read().then(({ done, value }) => {
-            if (done) {
-              resolve()
-              return
-            }
-            buffer += decoder.decode(value, { stream: true })
+            if (value) buffer += decoder.decode(value, { stream: true })
             let idx
             while ((idx = buffer.indexOf('\n')) >= 0) {
-              const line = buffer.slice(0, idx).trim()
+              const line = buffer.slice(0, idx)
               buffer = buffer.slice(idx + 1)
-              if (line.startsWith('data:')) {
-                const payload = line.slice(5).trim()
-                if (payload) {
-                  try {
-                    if (onEvent) onEvent(JSON.parse(payload))
-                  } catch (e) {
-                    /* 忽略无法解析的行 */
-                  }
-                }
+              handleLine(line)
+            }
+            if (done) {
+              // 流结束：若尾部数据没有以换行收尾，把剩余 buffer 也解析掉，
+              // 避免最后一个事件（如 done）残留在 buffer 中被丢弃
+              if (buffer) {
+                handleLine(buffer)
+                buffer = ''
               }
+              resolve()
+              return
             }
             return pump()
           })

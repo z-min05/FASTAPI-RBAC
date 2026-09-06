@@ -96,7 +96,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { getLogs } from '@/api/log'
 import dayjs from 'dayjs'
 
@@ -105,8 +105,10 @@ const searchUsername = ref('')
 const methodFilter = ref(null)
 const detailVisible = ref(false)
 const currentRecord = ref({})
+// 时间排序：默认倒序（最新在前）
+const order = ref('desc')
 
-const columns = [
+const columns = computed(() => [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
   { title: '用户', dataIndex: 'username', key: 'username', width: 100 },
   { title: '方法', dataIndex: 'method', key: 'method', width: 80 },
@@ -114,9 +116,17 @@ const columns = [
   { title: '状态码', dataIndex: 'status_code', key: 'status_code', width: 80 },
   { title: 'IP', dataIndex: 'ip', key: 'ip', width: 130 },
   { title: '耗时', dataIndex: 'duration', key: 'duration', width: 80 },
-  { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 180 },
+  {
+    title: '时间',
+    dataIndex: 'created_at',
+    key: 'created_at',
+    width: 180,
+    sorter: true,
+    sortDirections: ['descend', 'ascend'],
+    sortOrder: order.value === 'asc' ? 'ascend' : 'descend'
+  },
   { title: '操作', key: 'action', width: 80, fixed: 'right' }
-]
+])
 
 const tableData = ref([])
 const pagination = reactive({
@@ -155,7 +165,8 @@ async function loadData() {
   try {
     const res = await getLogs({
       page: pagination.current,
-      page_size: pagination.pageSize
+      page_size: pagination.pageSize,
+      order: order.value
     })
     tableData.value = res.data.items || []
     pagination.total = res.data.total || 0
@@ -164,9 +175,13 @@ async function loadData() {
   }
 }
 
-function handleTableChange(pag) {
+function handleTableChange(pag, _filters, sorter) {
   pagination.current = pag.current
   pagination.pageSize = pag.pageSize
+  // 排序切换时回到第一页；取消排序（第三下）回到默认倒序
+  const next = sorter && sorter.order ? (sorter.order === 'ascend' ? 'asc' : 'desc') : 'desc'
+  if (next !== order.value) pagination.current = 1
+  order.value = next
   loadData()
 }
 

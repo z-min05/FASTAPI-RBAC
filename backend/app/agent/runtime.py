@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import json
 import threading
 import time
@@ -17,6 +18,11 @@ from collections import OrderedDict
 from typing import Any
 
 from langchain_core.messages import AIMessageChunk, ToolMessageChunk
+
+try:  # langchain>=1.3 提供 TodoListMiddleware；旧版本缺失时跳过该能力
+    from langchain.agents.middleware import TodoListMiddleware
+except Exception:  # pragma: no cover
+    TodoListMiddleware = None
 
 from app.agent.config import get_agent_config
 from app.agent.core.agent_builder import AgentBuilder
@@ -81,6 +87,15 @@ def _build_instance(spec: dict) -> _Instance:
     tools = _registry.get_enabled(list(spec.get("tools") or []))
     middleware = create_agent_middleware(ledger)
 
+    # TodoListMiddleware：为复杂多步骤任务注入 write_todos 待办管理能力
+    # （通过 AgentMiddleware 机制扩展工具 + state 中维护 todos 列表）
+    middlewares: list[Any] = [middleware]
+    if TodoListMiddleware is not None:
+        try:
+            middlewares.append(TodoListMiddleware())
+        except Exception:  # pragma: no cover
+            logger.warning("TodoListMiddleware 初始化失败，已跳过", exc_info=True)
+
     llm = LLMFactory.create(
         llm_cfg.get("provider") or "openai",
         model=llm_cfg.get("model"),
@@ -95,7 +110,7 @@ def _build_instance(spec: dict) -> _Instance:
         AgentBuilder()
         .with_llm(llm)
         .with_tools(tools)
-        .with_middleware(middleware)
+        .with_middleware(*middlewares)
         .with_checkpointer(create_checkpointer("postgres"))
     )
     prompt = resolve_system_prompt(spec.get("system_prompt"))
@@ -211,6 +226,36 @@ def _try_parse_args(raw: str) -> Any:
         return None
 
 
+def _parse_todos(text: str) -> list[dict] | None:
+    """从 write_todos 工具的 ToolMessage 文本中解析待办列表。
+
+    内容形如：Updated todo list to [{'content': '...', 'status': 'pending'}, ...]
+    （python 字面量/JSON 均可解析）。解析失败返回 None。
+    """
+    if not text:
+        return None
+    raw = text.strip()
+    prefix = "Updated todo list to "
+    if raw.startswith(prefix):
+        raw = raw[len(prefix):].strip()
+    try:
+        data = ast.literal_eval(raw)
+    except Exception:
+        return None
+    if not isinstance(data, list):
+        return None
+    items: list[dict] = []
+    for it in data:
+        if not isinstance(it, dict):
+            continue
+        content = it.get("content")
+        status = it.get("status")
+        if content is None or status not in ("pending", "in_progress", "completed"):
+            continue
+        items.append({"content": str(content), "status": status})
+    return items
+
+
 def _stream_events(
     spec: dict,
     inst: _Instance,
@@ -235,6 +280,7 @@ def _stream_events(
     emitted_index: dict[str, int] = {}
     emitted_order: list[str] = []
     resulted: set[str] = set()
+    todo_calls: set[str] = set()  # write_todos 内部调用：转为 todo 事件而非普通工具卡
     tool_seq = {"n": -1}
     step_no = {"n": 0}
 
@@ -242,6 +288,12 @@ def _stream_events(
         tool_seq["n"] += 1
         emitted_index[call_id] = tool_seq["n"]
         emitted_order.append(call_id)
+        entry["emitted"] = True
+        entry["args_sent"] = args
+        if entry.get("name") == "write_todos":
+            # write_todos 由 TodoListMiddleware 维护：不作为普通工具卡展示，
+            # 其 ToolMessage 到达时统一转成 todo 事件
+            return
         emit(
             {
                 "type": "tool",
@@ -251,7 +303,6 @@ def _stream_events(
                 "call_id": call_id,
             }
         )
-        entry["emitted"] = True
 
     def _usage_record(usage: Any, tool_names: list[str]) -> None:
         if not usage or not usage.get("total_tokens"):
@@ -305,6 +356,16 @@ def _stream_events(
                 index = emitted_index.get(cid, -1)
                 call_id = cid
                 break
+        if call_id and call_id in todo_calls:
+            # write_todos 结果 → 待办列表事件（更新/替换当前待办）
+            resulted.add(call_id)
+            items = _parse_todos(output)
+            if items is not None:
+                emit({"type": "todo", "items": items})
+            tool_out["id"] = ""
+            tool_out["call_id"] = ""
+            tool_out["parts"] = []
+            return
         if index >= 0 and call_id:
             resulted.add(call_id)
         emit(
@@ -341,22 +402,27 @@ def _stream_events(
                     entry["name"] = tc["name"]
                 if tc.get("args"):
                     entry["args"] += tc["args"]
-        else:
-            # 非流式/聚合消息：tool_calls 已是完整结构
-            for tc in getattr(chunk, "tool_calls", None) or []:
-                call_id = tc.get("id") or ""
-                if not call_id:
-                    continue
-                entry = ai["tools"].setdefault(
-                    call_id, {"name": "", "args": "", "emitted": False}
-                )
-                if tc.get("name"):
-                    entry["name"] = tc["name"]
-                args = tc.get("args")
-                if isinstance(args, dict):
-                    entry["args"] = json.dumps(args, ensure_ascii=False)
-                elif args is not None:
-                    entry["args"] = str(args)
+        # 兼容层：某些供应商在聚合 chunk 上只把完整参数放在 tool_calls 里
+        # （tool_call_chunks 仅含 name），无论分片分支是否走都补齐完整参数
+        for tc in getattr(chunk, "tool_calls", None) or []:
+            call_id = tc.get("id") or ""
+            if not call_id:
+                continue
+            entry = ai["tools"].setdefault(
+                call_id, {"name": "", "args": "", "emitted": False}
+            )
+            if tc.get("name"):
+                entry["name"] = tc["name"]
+            args = tc.get("args")
+            if isinstance(args, dict) and args:
+                entry["args"] = json.dumps(args, ensure_ascii=False)
+            elif isinstance(args, str) and args.strip():
+                entry["args"] = args
+
+        # write_todos 是中间件内置工具：标记后其 ToolMessage 转为 todo 事件
+        for call_id, entry in ai["tools"].items():
+            if entry.get("name") == "write_todos":
+                todo_calls.add(call_id)
 
         # 模型回复过程中参数流即收敛为完整 JSON → 立刻提示“正在调用工具”，
         # 而不是等工具结果返回后才让前端看到调用
@@ -366,6 +432,23 @@ def _stream_events(
             args = _try_parse_args(entry["args"])
             if args is not None:
                 _emit_tool(call_id, entry, args)
+
+        # 已下发过事件但当时参数未就绪 → 参数补齐后补发（同一 index，前端按 index 更新展示）
+        for call_id, entry in ai["tools"].items():
+            if not entry["emitted"] or entry.get("args_sent") is not None or not entry.get("name"):
+                continue
+            args = _try_parse_args(entry["args"])
+            if args is not None:
+                entry["args_sent"] = args
+                emit(
+                    {
+                        "type": "tool",
+                        "index": emitted_index[call_id],
+                        "name": entry["name"],
+                        "args": args,
+                        "call_id": call_id,
+                    }
+                )
 
     def _is_ai_chunk(chunk) -> bool:
         return isinstance(chunk, AIMessageChunk) or getattr(chunk, "type", None) == "ai"

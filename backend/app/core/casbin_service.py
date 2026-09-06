@@ -16,10 +16,11 @@ Casbin 权限服务：基于 RBAC + 域模型实现 API/菜单/按钮三种权�
 import asyncio
 import os
 import threading
+from datetime import datetime
 from typing import List
 
 from casbin import Enforcer
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user_role import user_roles
@@ -28,6 +29,7 @@ from app.models.role_menu import role_menus
 from app.models.permission import Permission
 from app.models.menu import Menu
 from app.models.role import Role
+from app.models.api_key import ApiKey
 from app.utils.logger import logger
 
 # 权限域常量
@@ -100,7 +102,11 @@ async def get_enforcer() -> Enforcer:
 
 
 async def _is_superuser(user_id: int) -> bool:
-    """检查用户是否为超级管理员（带缓存）"""
+    """检查用户是否为超级管理员（带缓存）
+    API 密钥用户（负数 ID）永远不会是超级管理员。
+    """
+    if user_id < 0:
+        return False
     with _superuser_cache_lock:
         if user_id in _superuser_cache:
             return _superuser_cache[user_id]
@@ -180,6 +186,19 @@ async def sync_policies(db: AsyncSession) -> None:
     for row in rm_rows:
         role_menu_map.setdefault(row.role_id, set()).add(row.menu_id)
 
+    # 7. API 密钥-角色关联（活跃且有关联角色的密钥）
+    api_key_stmt = select(ApiKey).where(
+        ApiKey.is_active == True,
+        ApiKey.role_id.isnot(None),
+    )
+    api_key_result = await db.execute(api_key_stmt)
+    api_keys = list(api_key_result.scalars().all())
+    api_key_role_pairs: list[tuple[int, str]] = []
+    for ak in api_keys:
+        role_code = role_id_to_code.get(ak.role_id)
+        if role_code and (not ak.expires_at or ak.expires_at > datetime.now()):
+            api_key_role_pairs.append((ak.id, role_code))
+
     # ---- 第二步：构建新 Enforcer ----
     new_enforcer = Enforcer(_get_model_path())
     new_enforcer.enable_auto_save(False)
@@ -189,6 +208,11 @@ async def sync_policies(db: AsyncSession) -> None:
         for rc in role_codes:
             for dom in [DOMAIN_API, DOMAIN_MENU, DOMAIN_BUTTON]:
                 new_enforcer.add_named_grouping_policy("g", f"user:{uid}", f"role:{rc}", dom)
+
+    # API 密钥 -> 角色继承
+    for ak_id, role_code in api_key_role_pairs:
+        for dom in [DOMAIN_API, DOMAIN_MENU, DOMAIN_BUTTON]:
+            new_enforcer.add_named_grouping_policy("g", f"user:api_key_{ak_id}", f"role:{role_code}", dom)
 
     # 角色 -> API 权限（仅来自 Permission 表）
     for role_id, perm_ids in role_perm_map.items():
@@ -224,20 +248,23 @@ async def sync_policies(db: AsyncSession) -> None:
 
     # 持久化到数据库（如果使用适配器）
     try:
-        from casbin_sqlalchemy_adapter import Adapter
-        sync_engine = _create_sync_engine()
-        adapter = Adapter(sync_engine)
-        persist_enforcer = Enforcer(_get_model_path(), adapter)
-        persist_enforcer.enable_auto_save(True)
-        # 清除旧策略，保存新策略
-        persist_enforcer.clear_policy()
-        persist_enforcer.save_policy()
+        _persist_policies_to_db()
         logger.info("Casbin 策略已持久化到 casbin_rule 表")
     except Exception as e:
         logger.warning(f"Casbin 策略持久化失败（不影响内存策略）: {e}")
 
     policy_count = len(new_enforcer.get_policy()) + len(new_enforcer.get_grouping_policy())
-    logger.info(f"Casbin 策略同步完成: {len(user_role_pairs)} 个用户, {policy_count} 条策略")
+    logger.info(f"Casbin 策略同步完成: {len(user_role_pairs)} 个用户, {len(api_key_role_pairs)} 个API密钥, {policy_count} 条策略")
+
+
+def _get_casbin_subject(user_id: int) -> str:
+    """根据用户ID获取 Casbin 主体名称
+    - 正整数 ID: 普通用户 → user:{user_id}
+    - 负整数 ID: API 密钥 → user:api_key_{-user_id}
+    """
+    if user_id < 0:
+        return f"user:api_key_{-user_id}"
+    return f"user:{user_id}"
 
 
 async def check_api_permission(user_id: int, permission_code: str) -> bool:
@@ -245,7 +272,8 @@ async def check_api_permission(user_id: int, permission_code: str) -> bool:
     if await _is_superuser(user_id):
         return True
     enforcer = await get_enforcer()
-    return enforcer.enforce(f"user:{user_id}", DOMAIN_API, permission_code, "access")
+    subject = _get_casbin_subject(user_id)
+    return enforcer.enforce(subject, DOMAIN_API, permission_code, "access")
 
 
 async def check_menu_permission(user_id: int, menu_path: str) -> bool:
@@ -253,7 +281,8 @@ async def check_menu_permission(user_id: int, menu_path: str) -> bool:
     if await _is_superuser(user_id):
         return True
     enforcer = await get_enforcer()
-    return enforcer.enforce(f"user:{user_id}", DOMAIN_MENU, menu_path, "access")
+    subject = _get_casbin_subject(user_id)
+    return enforcer.enforce(subject, DOMAIN_MENU, menu_path, "access")
 
 
 async def check_button_permission(user_id: int, button_code: str) -> bool:
@@ -261,7 +290,8 @@ async def check_button_permission(user_id: int, button_code: str) -> bool:
     if await _is_superuser(user_id):
         return True
     enforcer = await get_enforcer()
-    return enforcer.enforce(f"user:{user_id}", DOMAIN_BUTTON, button_code, "click")
+    subject = _get_casbin_subject(user_id)
+    return enforcer.enforce(subject, DOMAIN_BUTTON, button_code, "click")
 
 
 async def get_user_api_permissions(user_id: int) -> List[str]:
@@ -273,7 +303,8 @@ async def get_user_api_permissions(user_id: int) -> List[str]:
             return [r[0] for r in result.all()]
 
     enforcer = await get_enforcer()
-    roles = enforcer.get_roles_for_user_in_domain(f"user:{user_id}", DOMAIN_API)
+    subject = _get_casbin_subject(user_id)
+    roles = enforcer.get_roles_for_user_in_domain(subject, DOMAIN_API)
     perms = set()
     for role in roles:
         policies = enforcer.get_permissions_for_user_in_domain(role, DOMAIN_API)
@@ -286,7 +317,8 @@ async def get_user_api_permissions(user_id: int) -> List[str]:
 async def get_user_menu_paths(user_id: int) -> List[str]:
     """获取用户所有可访问的菜单路径列表"""
     enforcer = await get_enforcer()
-    roles = enforcer.get_roles_for_user_in_domain(f"user:{user_id}", DOMAIN_MENU)
+    subject = _get_casbin_subject(user_id)
+    roles = enforcer.get_roles_for_user_in_domain(subject, DOMAIN_MENU)
     paths = set()
     for role in roles:
         policies = enforcer.get_permissions_for_user_in_domain(role, DOMAIN_MENU)
@@ -307,7 +339,8 @@ async def get_user_button_permissions(user_id: int) -> List[str]:
             return [r[0] for r in result.all() if r[0]]
 
     enforcer = await get_enforcer()
-    roles = enforcer.get_roles_for_user_in_domain(f"user:{user_id}", DOMAIN_BUTTON)
+    subject = _get_casbin_subject(user_id)
+    roles = enforcer.get_roles_for_user_in_domain(subject, DOMAIN_BUTTON)
     perms = set()
     for role in roles:
         policies = enforcer.get_permissions_for_user_in_domain(role, DOMAIN_BUTTON)
@@ -321,10 +354,14 @@ async def get_user_menus(db: AsyncSession, user_id: int) -> list[dict]:
     """获取用户可见的菜单列表（使用 SQL IN 查询，避免全表扫描）"""
     from app.models.user import User
 
-    # 超级用户返回所有可见菜单
-    user_stmt = select(User.is_superuser).where(User.id == user_id)
-    result = await db.execute(user_stmt)
-    is_superuser = result.scalar_one_or_none() or False
+    # API 密钥用户（负数 ID）永远不会是超级用户
+    if user_id < 0:
+        is_superuser = False
+    else:
+        # 超级用户返回所有可见菜单
+        user_stmt = select(User.is_superuser).where(User.id == user_id)
+        result = await db.execute(user_stmt)
+        is_superuser = result.scalar_one_or_none() or False
 
     if is_superuser:
         stmt = select(Menu).where(Menu.visible == True).order_by(Menu.sort)
@@ -402,6 +439,76 @@ async def _check_policy_version() -> bool:
     except Exception:
         pass
     return False
+
+
+def _persist_policies_to_db() -> None:
+    """将当前 Enforcer 的策略持久化到 casbin_rule 表"""
+    try:
+        from casbin_sqlalchemy_adapter import Adapter
+        sync_engine = _create_sync_engine()
+        adapter = Adapter(sync_engine)
+        persist_enforcer = Enforcer(_get_model_path(), adapter)
+        persist_enforcer.enable_auto_save(True)
+        persist_enforcer.clear_policy()
+
+        # 将当前内存策略写入持久化 Enforcer
+        for p in _enforcer.get_policy():
+            persist_enforcer.add_policy(p)
+        for gp in _enforcer.get_named_grouping_policy("g"):
+            persist_enforcer.add_named_grouping_policy("g", gp)
+
+        persist_enforcer.save_policy()
+    except Exception as e:
+        logger.warning(f"Casbin 策略持久化失败（不影响内存策略）: {e}")
+
+
+def _sync_single_api_key_policy_db(subject: str, role_code: str | None) -> None:
+    """在 casbin_rule 表中增量更新单个 API Key 的继承策略（单事务，避免全表重写）"""
+    sync_engine = _create_sync_engine()
+    try:
+        with sync_engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM casbin_rule WHERE ptype = 'g' AND v0 = :subject"),
+                {"subject": subject},
+            )
+            if role_code:
+                for dom in [DOMAIN_API, DOMAIN_MENU, DOMAIN_BUTTON]:
+                    conn.execute(
+                        text(
+                            "INSERT INTO casbin_rule (ptype, v0, v1, v2) "
+                            "VALUES ('g', :subject, :role, :dom)"
+                        ),
+                        {"subject": subject, "role": f"role:{role_code}", "dom": dom},
+                    )
+    except Exception as e:
+        logger.warning(f"Casbin API Key 策略增量持久化失败: {e}")
+    finally:
+        sync_engine.dispose()
+
+
+async def update_api_key_policy(api_key_id: int, role_code: str | None) -> None:
+    """
+    轻量级更新单个 API Key 的 Casbin 策略（不触发全量同步）。
+    删除旧策略，如果 role_code 不为 None 则添加新策略，然后持久化 + 版本号递增。
+    """
+    enforcer = await get_enforcer()
+    subject = f"user:api_key_{api_key_id}"
+
+    with _enforcer_lock:
+        # 移除该 API Key 的所有现有策略
+        for dom in [DOMAIN_API, DOMAIN_MENU, DOMAIN_BUTTON]:
+            enforcer.remove_filtered_named_grouping_policy("g", 0, subject)
+
+        # 添加新策略
+        if role_code:
+            for dom in [DOMAIN_API, DOMAIN_MENU, DOMAIN_BUTTON]:
+                enforcer.add_named_grouping_policy("g", subject, f"role:{role_code}", dom)
+
+    # 增量持久化到数据库（单事务直接 SQL，避免全表重写）
+    _sync_single_api_key_policy_db(subject, role_code)
+
+    # 版本号递增（通知其他 Worker 重新加载）
+    await _bump_policy_version()
 
 
 async def _reload_if_stale(db: AsyncSession) -> None:

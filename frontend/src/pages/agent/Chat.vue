@@ -51,36 +51,76 @@
             <div v-for="msg in messages" :key="msg.key" class="msg-row" :class="msg.role">
               <div class="msg-avatar" :class="msg.role">{{ msg.role === 'user' ? '我' : 'AI' }}</div>
               <div class="msg-content">
-                <!-- 工具调用：默认折叠、可展开（置于文本上方，符合“先调工具后出结果”的语义） -->
-                <div v-if="msg.tools && msg.tools.length" class="msg-tools">
-                  <div class="tools-toggle" @click="msg.toolsOpen = !msg.toolsOpen">
-                    <LoadingOutlined v-if="msg.tools.some(t => !t.done)" class="tools-icon spin" />
-                    <ToolOutlined v-else class="tools-icon" />
-                    <span class="tools-text">{{ toolsLabel(msg) }}</span>
-                    <DownOutlined v-if="msg.toolsOpen" class="tools-caret" />
-                    <RightOutlined v-else class="tools-caret" />
+                <!-- 按事件到达顺序渲染：思考文本/待办/工具调用交替出现（均可折叠展开） -->
+                <template v-for="(part, pi) in msg.parts || []" :key="pi">
+                  <!-- 思考过程：文本后还有待办/工具段落 → 视为前置思考，折叠展示 -->
+                  <div v-if="part.type === 'text' && isThinkText(msg.parts, pi)" class="msg-think">
+                    <div class="tools-toggle" @click="part.open = !part.open">
+                      <BulbOutlined class="tools-icon" />
+                      <span class="tools-text">思考过程</span>
+                      <DownOutlined v-if="part.open" class="tools-caret" />
+                      <RightOutlined v-else class="tools-caret" />
+                    </div>
+                    <div v-if="part.open" class="think-body">{{ part.text }}</div>
                   </div>
-                  <div v-if="msg.toolsOpen" class="tools-list">
-                    <div v-for="t in msg.tools" :key="t.call_id || t.index" class="tool-item">
-                      <div class="tool-item-head">
-                        <code class="tool-name">{{ t.name }}</code>
-                        <span class="tool-status" :class="{ ok: t.done }">{{ t.done ? '完成' : '运行中' }}</span>
+                  <div v-else-if="part.type === 'text'" class="msg-bubble">{{ part.text }}</div>
+
+                  <!-- 待办计划（TodoListMiddleware 维护）：也是思考过程，折叠展示 -->
+                  <div v-else-if="part.type === 'todo'" class="msg-tools">
+                    <div class="tools-toggle" @click="part.open = !part.open">
+                      <ScheduleOutlined v-if="todoRunning(part.items)" class="tools-icon spin" />
+                      <ScheduleOutlined v-else class="tools-icon" />
+                      <span class="tools-text">{{ todoLabel(part.items) }}</span>
+                      <DownOutlined v-if="part.open" class="tools-caret" />
+                      <RightOutlined v-else class="tools-caret" />
+                    </div>
+                    <div v-if="part.open" class="tools-list">
+                      <div v-for="(it, ii) in part.items" :key="ii" class="todo-item">
+                        <span class="todo-status" :class="it.status">{{ todoStatusText(it.status) }}</span>
+                        <span class="todo-content">{{ it.content }}</span>
                       </div>
-                      <pre v-if="t.argsText" class="tool-pre">{{ t.argsText }}</pre>
-                      <pre v-if="t.done && t.output" class="tool-pre">{{ t.output }}</pre>
                     </div>
                   </div>
+
+                  <!-- 工具调用：默认折叠、可展开 -->
+                  <div v-else-if="part.type === 'tools' && part.items.length" class="msg-tools">
+                    <div class="tools-toggle" @click="part.open = !part.open">
+                      <LoadingOutlined v-if="part.items.some(t => !t.done)" class="tools-icon spin" />
+                      <ToolOutlined v-else class="tools-icon" />
+                      <span class="tools-text">{{ toolsLabel(part.items) }}</span>
+                      <DownOutlined v-if="part.open" class="tools-caret" />
+                      <RightOutlined v-else class="tools-caret" />
+                    </div>
+                    <div v-if="part.open" class="tools-list">
+                      <div v-for="t in part.items" :key="t.call_id || t.index" class="tool-item">
+                        <div class="tool-item-head">
+                          <code class="tool-name">{{ t.name }}</code>
+                          <span class="tool-status" :class="{ ok: t.done }">{{ t.done ? '完成' : '运行中' }}</span>
+                        </div>
+                        <pre v-if="t.argsText" class="tool-pre">{{ t.argsText }}</pre>
+                        <pre v-if="t.done && t.output" class="tool-pre">{{ t.output }}</pre>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- 历史消息：无 parts 结构，直接展示整段 content -->
+                <div v-if="msg.content && !(msg.parts && msg.parts.length)" class="msg-bubble">{{ msg.content }}</div>
+
+                <!-- 已有内容但仍在生成：给出“生成中”反馈，防止中途停顿被误认为已结束/被截断 -->
+                <div v-if="msg.streaming && !msg.error && hasStreamActivity(msg)" class="msg-streaming">
+                  <span class="streaming-dot"></span>
+                  生成中…
                 </div>
 
-                <div v-if="msg.content || msg.error || (msg.streaming && !(msg.tools && msg.tools.length))" class="msg-bubble">
-                  <template v-if="msg.content">{{ msg.content }}</template>
-                  <span v-else-if="msg.error" class="err-text">{{ msg.errorText || '抱歉，请求失败，请稍后重试。' }}</span>
-                  <span v-else class="thinking">思考中…</span>
-                </div>
+                <!-- 流式等待占位 -->
+                <div v-if="showPlaceholder(msg)" class="msg-bubble"><span class="thinking">思考中…</span></div>
+
+                <!-- 错误提示 -->
+                <div v-if="msg.error" class="msg-bubble"><span class="err-text">{{ msg.errorText || '抱歉，请求失败，请稍后重试。' }}</span></div>
 
                 <div class="msg-meta">
-                  <span v-if="msg.error && msg.content" class="meta-err">{{ msg.errorText || '请求失败' }}</span>
-                  <template v-else-if="msg.role === 'assistant'">
+                  <template v-if="msg.role === 'assistant'">
                     <span v-if="msg.tokens && msg.tokens.total != null">
                       输入 {{ msg.tokens.input }} · 输出 {{ msg.tokens.output }} · 合计 {{ msg.tokens.total }}
                     </span>
@@ -159,7 +199,8 @@ import { Modal, message } from 'ant-design-vue'
 import { useRouter } from 'vue-router'
 import {
   PlusOutlined, DeleteOutlined, SendOutlined, RobotOutlined,
-  DownOutlined, RightOutlined, ToolOutlined, LoadingOutlined
+  DownOutlined, RightOutlined, ToolOutlined, LoadingOutlined,
+  BulbOutlined, ScheduleOutlined
 } from '@ant-design/icons-vue'
 import {
   listAgentConversations,
@@ -307,6 +348,7 @@ function scheduleScroll() {
 }
 
 function formatToolArgs(args) {
+  if (args == null || args === '') return ''
   if (typeof args === 'string') return args
   try {
     return JSON.stringify(args, null, 2)
@@ -315,9 +357,73 @@ function formatToolArgs(args) {
   }
 }
 
-function toolsLabel(msg) {
-  const running = msg.tools.some(t => !t.done)
-  return running ? '正在调用工具…' : `使用了 ${msg.tools.length} 次工具调用`
+function toolsLabel(items) {
+  const running = items.some(t => !t.done)
+  return running ? '正在调用工具…' : `使用了 ${items.length} 次工具调用`
+}
+
+// 文本段后仍存在待办/工具段 → 视为思考过程（前置说明），否则为最终回复
+function isThinkText(parts, pi) {
+  for (let i = pi + 1; i < parts.length; i++) {
+    const p = parts[i]
+    if (p.type === 'tools' || p.type === 'todo') return true
+  }
+  return false
+}
+
+const TODO_STATUS_TEXT = { pending: '待处理', in_progress: '进行中', completed: '已完成' }
+
+function todoRunning(items) {
+  return (items || []).some(it => it.status !== 'completed')
+}
+
+function todoLabel(items) {
+  const total = (items || []).length
+  const done = (items || []).filter(it => it.status === 'completed').length
+  return todoRunning(items) ? `待办计划（${done}/${total}）…` : `待办计划（${done}/${total}）`
+}
+
+function todoStatusText(status) {
+  return TODO_STATUS_TEXT[status] || status || ''
+}
+
+// 该 assistant 消息是否已渲染出任何可见内容（文本/工具/待办）
+function hasStreamActivity(msg) {
+  const parts = msg.parts || []
+  return parts.some(p => p.type === 'text' && p.text) ||
+    parts.some(p => p.type === 'tools' && p.items.length) ||
+    parts.some(p => p.type === 'todo' && p.items.length)
+}
+
+function showPlaceholder(msg) {
+  if (msg.role !== 'assistant' || !msg.streaming || msg.error) return false
+  return !hasStreamActivity(msg)
+}
+
+// done 事件到达后，用后端最终 reply 兜底/自愈流式展示（见 done 分支说明）
+function healWithReply(msg, reply) {
+  if (!reply) return
+  const parts = msg.parts || []
+  const last = parts[parts.length - 1]
+  if (last && last.type === 'text' && last.text) {
+    const cur = last.text
+    // 1) 最常见的整体单段回复：当前文本是 reply 的前缀但更短 → 直接补缺失尾部
+    if (reply.length > cur.length && reply.startsWith(cur)) {
+      last.text += reply.slice(cur.length)
+      return
+    }
+    // 2) reply 前半部分是旁白/思考文字（前端按序分成了多个文本段）：
+    //    在 reply 中定位最后一段文本的最后一次出现，补齐其后缺失的内容
+    const idx = reply.lastIndexOf(cur)
+    if (idx >= 0 && reply.length > idx + cur.length) {
+      last.text += reply.slice(idx + cur.length)
+    }
+    return
+  }
+  // 一条文本事件都没渲染成功 → 直接用完整回复展示
+  if (!parts.some(p => p.type === 'text' && p.text)) {
+    parts.push({ type: 'text', text: reply })
+  }
 }
 
 async function handleSend() {
@@ -331,63 +437,97 @@ async function handleSend() {
   messages.value.push({
     key: aiKey,
     role: 'assistant',
-    content: '',
+    parts: [],
     streaming: true,
     error: false,
     errorText: '',
-    tools: [],
-    toolsOpen: false,
     tokens: null
   })
   sending.value = true
   await scrollToBottom()
 
-  const toolMap = new Map()
-
-  // SSE 事件队列：本地/短响应时整个 body 可能一次网络读取就全部到达，
-  // 若同步处理会把全部文本一次性渲染（看起来不像流式）。
-  // 改为固定间隔逐条消费，保证“打字机”式的增量呈现。
-  const queue = []
-  let busy = false
+  // SSE 事件即到即渲染：按网络真实到达节奏逐条呈现文本/工具/结果，
+  // 不额外做队列缓冲或拆段（避免人为引入截断/丢帧问题）
+  function findTool(msg, callId, index) {
+    for (const part of msg.parts || []) {
+      if (part.type !== 'tools') continue
+      const t = part.items.find(x => x.call_id && x.call_id === callId) ||
+        part.items.find(x => index != null && x.index === index)
+      if (t) return t
+    }
+    return null
+  }
 
   function applyEvent(ev) {
     const idx = messages.value.findIndex(m => m.key === aiKey)
     if (idx < 0) return
     const msg = messages.value[idx]
     switch (ev.type) {
-      case 'text':
-        msg.content += ev.content || ''
+      case 'text': {
+        const text = ev.content || ''
+        if (!text) break
+        const last = msg.parts[msg.parts.length - 1]
+        if (last && last.type === 'text') last.text += text
+        else msg.parts.push({ type: 'text', text })
         scheduleScroll()
         break
+      }
       case 'tool': {
+        const existed = findTool(msg, ev.call_id, ev.index)
+        if (existed) {
+          // 同一工具调用再次下发（如后端补全参数）：只更新参数展示
+          if (ev.args != null) existed.argsText = formatToolArgs(ev.args)
+          break
+        }
         const tool = {
           index: ev.index,
-          call_id: ev.call_id,
+          call_id: ev.call_id || '',
           name: ev.name || '未知工具',
           argsText: formatToolArgs(ev.args),
           output: '',
           done: false
         }
-        msg.tools.push(tool)
-        if (ev.call_id) toolMap.set(ev.call_id, tool)
+        const last = msg.parts[msg.parts.length - 1]
+        if (last && last.type === 'tools') last.items.push(tool)
+        else msg.parts.push({ type: 'tools', items: [tool], open: false })
         scheduleScroll()
         break
       }
       case 'tool_result': {
-        const tool = toolMap.get(ev.call_id) ||
-          msg.tools.find(t => t.index === ev.index) ||
-          msg.tools.find(t => !t.done)
-        if (tool) {
-          tool.output = ev.output || ''
-          tool.done = true
+        const t = findTool(msg, ev.call_id, ev.index)
+        if (t) {
+          t.output = ev.output || ''
+          t.done = true
         }
+        scheduleScroll()
+        break
+      }
+      case 'todo': {
+        // 同一轮内 write_todos 可能多次更新 → 复用同一待办段，替换最新列表
+        let tp = (msg.parts || []).find(p => p.type === 'todo')
+        if (!tp) {
+          tp = { type: 'todo', items: [], open: false }
+          msg.parts.push(tp)
+        }
+        tp.items = ev.items || []
         scheduleScroll()
         break
       }
       case 'done':
         msg.streaming = false
-        msg.content = msg.content || ev.reply || ''
         if (ev.tokens) msg.tokens = ev.tokens
+        // done 到达说明整轮已结束：个别未收到 tool_result 的工具实际已执行完，
+        // 统一标记为完成，避免卡片一直停留在“运行中”
+        for (const p of msg.parts || []) {
+          if (p.type === 'tools') {
+            for (const t of p.items) t.done = true
+          }
+        }
+        // 用后端最终 reply 兜底/自愈：
+        // 1) 完全没有文本段 → 直接用完整回复展示；
+        // 2) 最后一段文本比 reply 短且是其前缀 → 说明尾部 text 事件在展示中丢失，只补缺失后缀，
+        //    保证页面展示与后端落库（重新加载后看到的内容）一致。
+        healWithReply(msg, ev.reply)
         break
       case 'error':
         msg.streaming = false
@@ -397,43 +537,12 @@ async function handleSend() {
     }
   }
 
-  async function pump() {
-    if (busy) return
-    busy = true
-    while (queue.length) {
-      applyEvent(queue.shift())
-      // 每条事件间的小间隔：既保证逐字呈现，也不影响真实网络的到达节奏
-      await new Promise(r => setTimeout(r, 8))
-    }
-    busy = false
-  }
-
-  async function drainQueue() {
-    while (queue.length || busy) {
-      await new Promise(r => setTimeout(r, 10))
-    }
-  }
-
-  function enqueueEvent(ev) {
-    // 供应商可能一次返回较长文本片段，拆成小段以保证平滑的“打字机”效果
-    if (ev.type === 'text' && ev.content && ev.content.length > 8) {
-      for (let i = 0; i < ev.content.length; i += 8) {
-        queue.push({ type: 'text', content: ev.content.slice(i, i + 8) })
-      }
-      pump()
-      return
-    }
-    queue.push(ev)
-    pump()
-  }
-
   try {
     await sendAgentMessageStream(currentId.value, content, {
       onEvent(ev) {
-        enqueueEvent(ev)
+        applyEvent(ev)
       }
     })
-    await drainQueue() // 网络结束前保证队列消费完（含 done 事件）
     await scrollToBottom()
   } catch (e) {
     const idx = messages.value.findIndex(m => m.key === aiKey)
@@ -760,6 +869,30 @@ onMounted(async () => {
   color: #aaa;
 }
 
+/* 流式进行中的“生成中”反馈 */
+.msg-streaming {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #bbb;
+  user-select: none;
+}
+
+.streaming-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #1677ff;
+  animation: streaming-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes streaming-blink {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+
 .err-text,
 .meta-err {
   color: #ff4d4f;
@@ -862,6 +995,63 @@ onMounted(async () => {
   word-break: break-all;
   max-height: 200px;
   overflow: auto;
+}
+
+/* ===== 思考过程 / 待办计划 ===== */
+.msg-think {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.msg-think + .msg-bubble {
+  margin-top: 8px;
+}
+
+.think-body {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid #f0f0f0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #595959;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.todo-status {
+  flex: none;
+  margin-top: 1px;
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 6px;
+  border-radius: 3px;
+  color: #8c8c8c;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.todo-status.in_progress {
+  color: #1677ff;
+  background: rgba(22, 119, 255, 0.08);
+}
+
+.todo-status.completed {
+  color: #52c41a;
+  background: rgba(82, 196, 26, 0.1);
+}
+
+.todo-content {
+  color: #595959;
+  word-break: break-all;
 }
 
 /* ===== 输入区 ===== */

@@ -57,6 +57,12 @@ const routes = [
         meta: { title: '操作日志', icon: 'FileTextOutlined' }
       },
       {
+        path: 'system/api-keys',
+        name: 'ApiKeyManage',
+        component: () => import('@/pages/ApiKeyManage.vue'),
+        meta: { title: 'API 密钥', icon: 'KeyOutlined' }
+      },
+      {
         path: 'test/projects',
         name: 'ProjectManage',
         component: () => import('@/pages/test/ProjectManage.vue'),
@@ -67,6 +73,18 @@ const routes = [
         name: 'TestcaseManage',
         component: () => import('@/pages/test/TestcaseManage.vue'),
         meta: { title: '用例管理', icon: 'FileTextOutlined' }
+      },
+      {
+        path: 'test/plans',
+        name: 'TestPlanManage',
+        component: () => import('@/pages/test/TestPlanManage.vue'),
+        meta: { title: '测试计划', icon: 'ScheduleOutlined' }
+      },
+      {
+        path: 'test/plans/:id',
+        name: 'TestPlanDetail',
+        component: () => import('@/pages/test/TestPlanDetail.vue'),
+        meta: { title: '计划详情', activeMenu: '/test/plans' }
       },
       {
         path: 'agent/chat',

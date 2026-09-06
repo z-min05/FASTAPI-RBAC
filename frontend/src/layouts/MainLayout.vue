@@ -9,7 +9,7 @@
     >
       <div class="logo">
         <SafetyOutlined style="font-size: 24px" />
-        <span v-if="!appStore.collapsed" class="logo-text">RBAC 管理系统</span>
+        <span v-if="!appStore.collapsed" class="logo-text">测试管理系统</span>
       </div>
       <a-menu
         v-model:selectedKeys="selectedKeys"
@@ -104,6 +104,10 @@
       <a-layout-content class="content">
         <router-view />
       </a-layout-content>
+
+      <a-layout-footer class="footer">
+        测试管理系统 &copy; {{ new Date().getFullYear() }} - zhangzhimin
+      </a-layout-footer>
     </a-layout>
   </a-layout>
 </template>
@@ -132,6 +136,7 @@ import {
   OrderedListOutlined,
   PartitionOutlined,
   FileSearchOutlined,
+  ScheduleOutlined,
   FundOutlined,
   BuildOutlined,
   FolderOutlined,
@@ -162,6 +167,7 @@ const iconMap = {
   OrderedListOutlined,
   PartitionOutlined,
   FileSearchOutlined,
+  ScheduleOutlined,
   FolderOutlined,
   RobotOutlined,
   MessageOutlined,
@@ -194,16 +200,34 @@ function findParentKeys(menus, targetPath) {
   return []
 }
 
+// 详情页等隐藏路由：菜单无完全匹配路径时，取最长的菜单路径前缀做高亮
+function findBestMenuPath(menus, targetPath) {
+  let best = ''
+  const walk = (list) => {
+    for (const m of list || []) {
+      if (m.menu_type === 'menu' && (targetPath === m.path || targetPath.startsWith(m.path + '/'))) {
+        if (m.path.length > best.length) best = m.path
+      }
+      if (m.children && m.children.length) walk(m.children)
+    }
+  }
+  walk(menus)
+  return best || targetPath
+}
+
+function syncMenu(path) {
+  const target = route.meta?.activeMenu || findBestMenuPath(menuList.value, path)
+  selectedKeys.value = [target]
+  openKeys.value = findParentKeys(menuList.value, target)
+}
+
 watch(
   () => route.path,
-  (path) => {
-    selectedKeys.value = [path]
-    openKeys.value = findParentKeys(menuList.value, path)
-  }
+  (path) => syncMenu(path)
 )
 
 watch(menuList, () => {
-  openKeys.value = findParentKeys(menuList.value, route.path)
+  syncMenu(route.path)
 }, { immediate: true })
 
 function onMenuClick({ key }) {
@@ -307,5 +331,14 @@ onMounted(async () => {
   background: #fff;
   border-radius: 8px;
   min-height: 280px;
+}
+
+.footer {
+  text-align: center;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  padding: 12px 24px;
+  background: #fff;
+  border-top: 1px solid #f0f0f0;
 }
 </style>

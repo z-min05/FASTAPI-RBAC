@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, Query
+from typing import Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.dependency import require_permissions, get_current_active_user
+from app.dependency import require_permissions_any, get_current_active_user_any
 from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse
 from app.services.project_service import ProjectService
@@ -16,12 +17,13 @@ router = APIRouter(prefix="/projects", tags=["项目管理"])
 async def get_projects(
     keyword: str | None = Query(None, description="关键字（编码/名称）"),
     is_active: bool | None = Query(None, description="启用状态"),
+    order: Literal["asc", "desc"] = Query("desc", description="创建时间排序：asc 正序 / desc 倒序（默认倒序）"),
     params: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("project:list")),
+    current_user: User = Depends(require_permissions_any("project:list")),
 ):
     service = ProjectService(db)
-    result = await service.get_projects(params, keyword, is_active)
+    result = await service.get_projects(params, keyword, is_active, order)
     raw = result.model_dump()
     raw["items"] = [ProjectResponse.model_validate(p).model_dump() for p in result.items]
     return Response.success(data=raw)
@@ -30,7 +32,7 @@ async def get_projects(
 @router.get("/all", summary="全部启用项目（下拉用）")
 async def get_all_projects(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("project:list")),
+    current_user: User = Depends(require_permissions_any("project:list")),
 ):
     service = ProjectService(db)
     projects = await service.get_all_projects()
@@ -42,7 +44,7 @@ async def get_all_projects(
 @router.get("/owners", summary="可选负责人（下拉用）")
 async def get_owner_options(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user_any),
 ):
     service = ProjectService(db)
     return Response.success(data=await service.get_owner_candidates())
@@ -52,7 +54,7 @@ async def get_owner_options(
 async def get_project(
     project_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("project:detail")),
+    current_user: User = Depends(require_permissions_any("project:detail")),
 ):
     service = ProjectService(db)
     project = await service.get_project(project_id)
@@ -63,7 +65,7 @@ async def get_project(
 async def create_project(
     data: ProjectCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("project:create")),
+    current_user: User = Depends(require_permissions_any("project:create")),
 ):
     service = ProjectService(db)
     project = await service.create_project(data)
@@ -75,7 +77,7 @@ async def update_project(
     project_id: int,
     data: ProjectUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("project:update")),
+    current_user: User = Depends(require_permissions_any("project:update")),
 ):
     service = ProjectService(db)
     project = await service.update_project(project_id, data)
@@ -86,7 +88,7 @@ async def update_project(
 async def delete_project(
     project_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permissions("project:delete")),
+    current_user: User = Depends(require_permissions_any("project:delete")),
 ):
     service = ProjectService(db)
     await service.delete_project(project_id)

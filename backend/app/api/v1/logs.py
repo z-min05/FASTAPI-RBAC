@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends
+from typing import Literal
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.dependency import get_current_active_user, require_permissions
@@ -13,12 +14,13 @@ router = APIRouter(prefix="/logs", tags=["操作日志"])
 
 @router.get("", summary="获取操作日志列表")
 async def get_logs(
+    order: Literal["asc", "desc"] = Query("desc", description="时间排序：asc 正序 / desc 倒序（默认倒序）"),
     params: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permissions("log:list")),
 ):
     service = LogService(db)
-    result = await service.get_logs(params)
+    result = await service.get_logs(params, order)
     return Response.success(data=result.model_dump())
 
 
