@@ -75,32 +75,7 @@
       </a-col>
     </a-row>
 
-    <!-- 下方区域 -->
-    <a-row :gutter="24" style="margin-top: 24px">
-      <a-col :span="16">
-        <a-card title="系统信息" :bordered="false">
-          <a-descriptions :column="2" bordered size="small">
-            <a-descriptions-item label="系统名称">RBAC 管理系统</a-descriptions-item>
-            <a-descriptions-item label="系统版本">1.0.0</a-descriptions-item>
-            <a-descriptions-item label="前端框架">Vue 3 + Ant Design Vue</a-descriptions-item>
-            <a-descriptions-item label="后端框架">FastAPI</a-descriptions-item>
-            <a-descriptions-item label="数据库">PostgreSQL</a-descriptions-item>
-          </a-descriptions>
-        </a-card>
-      </a-col>
-      <a-col :span="8">
-        <a-card title="快捷操作" :bordered="false">
-          <a-space direction="vertical" style="width: 100%">
-            <a-button type="primary" block @click="$router.push('/test/plans')">
-              <FileTextOutlined /> 测试计划
-            </a-button>
-            <a-button block @click="$router.push('/test/testcases')">
-              <CheckCircleOutlined /> 测试用例
-            </a-button>
-          </a-space>
-        </a-card>
-      </a-col>
-    </a-row>
+
   </div>
 </template>
 

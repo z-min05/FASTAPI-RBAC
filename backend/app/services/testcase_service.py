@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.testcase_repo import TestCaseRepository
 from app.repositories.project_repo import ProjectRepository
+from app.repositories.plan_repo import PlanTestCaseRepository
 from app.models.testcase import TestCase
 from app.models.project import Project
 from app.schemas.testcase import (
@@ -56,6 +57,7 @@ class TestCaseService:
         self.db = db
         self.testcase_repo = TestCaseRepository(db)
         self.project_repo = ProjectRepository(db)
+        self.plan_tc_repo = PlanTestCaseRepository(db)
 
     # ---------- 查询 ----------
 

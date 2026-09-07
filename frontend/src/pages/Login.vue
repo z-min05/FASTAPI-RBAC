@@ -3,8 +3,8 @@
     <div class="login-card">
       <div class="login-header">
         <SafetyOutlined class="login-icon" />
-        <h1>RBAC 管理系统</h1>
-        <p>基于角色的访问控制管理平台</p>
+        <h1>测试管理系统</h1>
+        <p>测试用例管理自动化测试平台</p>
       </div>
       <a-form
         :model="formState"
