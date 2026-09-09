@@ -63,6 +63,12 @@ const routes = [
         meta: { title: 'API 密钥', icon: 'KeyOutlined' }
       },
       {
+        path: 'system/wecom-robots',
+        name: 'WecomRobotManage',
+        component: () => import('@/pages/WecomRobotManage.vue'),
+        meta: { title: '企业微信机器人', icon: 'WechatOutlined' }
+      },
+      {
         path: 'test/projects',
         name: 'ProjectManage',
         component: () => import('@/pages/test/ProjectManage.vue'),

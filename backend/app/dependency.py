@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.security import decode_token
-from app.exceptions import UnauthorizedException, ForbiddenException
+from app.exceptions import UnauthorizedException, ForbiddenException, BadRequestException
 from app.models.user import User
 from app.models.api_key import ApiKey
 from app.core.casbin_service import (
@@ -75,6 +75,9 @@ async def _authenticate_api_key(token: str, db: AsyncSession) -> User:
     # 附加角色信息供后续权限校验使用
     user._api_key_role_id = api_key.role_id
     user._is_api_key = True
+    # 归属用户：API 密钥没有真实 user_id，凡需把"操作人/责任人"落库的字段
+    # （测试人 tester_id、定时任务创建人 created_by 等）统一使用密钥归属用户（创建人）
+    user._owner_user_id = api_key.created_by
     return user
 
 
@@ -237,3 +240,21 @@ async def get_current_user_by_api_key(
         raise UnauthorizedException("无效的 API 密钥格式")
 
     return await _authenticate_api_key(raw_key, db)
+
+
+def actor_user_id(current_user: User) -> int:
+    """返回需要落库的"操作人/责任人"用户 id（真实用户 id，正数）。
+
+    - 真实登录用户（JWT）：返回本人 id
+    - API 密钥调用：返回密钥的归属用户 id（api_keys.created_by）；
+      未绑定时直接报错，避免把负 id 写入带 FK 的 tester_id/created_by 等字段
+    """
+    if getattr(current_user, "_is_api_key", False):
+        owner = getattr(current_user, "_owner_user_id", None)
+        if owner is None:
+            raise BadRequestException(
+                "该 API 密钥未绑定归属用户（创建人），无法记录操作人，"
+                "请联系管理员回填 api_keys.created_by 后重试"
+            )
+        return owner
+    return current_user.id

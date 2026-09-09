@@ -23,6 +23,9 @@
         <a-button type="primary" @click="openAddModal" v-permission="'plan:case:add'">
           <PlusOutlined /> 添加用例
         </a-button>
+        <a-button @click="openScheduleDrawer" v-permission="'plan:schedule:list'">
+          <FieldTimeOutlined /> 定时执行
+        </a-button>
       </div>
     </div>
 
@@ -110,6 +113,7 @@
           <a-space>
             <a-button type="link" size="small" @click="openCaseDetail(record)">查看</a-button>
             <a-button v-if="record.module_code && record.case_code" type="link" size="small" :disabled="record.result === 'running'" @click="handleExecute(record)" v-permission="'plan:case:execute'">执行</a-button>
+            <a-button type="link" size="small" @click="openLogDrawer(record)" v-permission="'plan:case:list'">日志</a-button>
             <a-button type="link" size="small" @click="openResultModal(record)" v-permission="'plan:case:result'">记录结果</a-button>
             <a-popconfirm title="确定从该计划中移除这条用例？" @confirm="handleRemove(record.id)">
               <a-button type="link" size="small" danger v-permission="'plan:case:remove'">移除</a-button>
@@ -125,7 +129,7 @@
       title="编辑测试计划"
       @ok="handleEditPlan"
       :confirm-loading="editLoading"
-      width="520px"
+      width="600px"
     >
       <a-form :model="editForm" :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
         <a-form-item label="计划名称" required>
@@ -139,6 +143,23 @@
         </a-form-item>
         <a-form-item label="计划描述">
           <a-textarea v-model:value="editForm.description" :rows="3" />
+        </a-form-item>
+        <a-divider style="margin: 8px 0">结果推送（企业微信群机器人）</a-divider>
+        <a-form-item label="推送机器人">
+          <a-select
+            v-model:value="editForm.robot_ids"
+            mode="multiple"
+            :options="robotSelectOptions"
+            placeholder="批量/定时执行完成后推送统计到群，不选则不推送"
+            style="width: 100%"
+            allow-clear
+            :max-tag-count="4"
+          >
+            <template #option="{ value, label }">
+              <span :class="{ 'opt-disabled': isDisabledRobot(value) }">{{ label }}</span>
+            </template>
+          </a-select>
+          <div class="form-tip">仅在「批量执行」或「定时执行」整轮结束后推送一次统计（含失败明细）</div>
         </a-form-item>
       </a-form>
     </a-modal>
@@ -250,6 +271,208 @@
         <pre class="case-block-content">{{ caseDetail.expected_result || '无' }}</pre>
       </div>
     </a-modal>
+
+    <!-- 历史执行日志抽屉 -->
+    <a-drawer
+      v-model:open="logDrawerVisible"
+      :title="logDrawerTitle"
+      width="820px"
+      destroy-on-close
+    >
+      <div class="log-toolbar">
+        <a-space>
+          <a-button size="small" :loading="logLoading" @click="loadLogs">
+            <template #icon><ReloadOutlined /></template>
+            刷新
+          </a-button>
+          <span v-if="logs.length" class="log-tip">
+            共 {{ logs.length }} 次执行记录；最新一次不允许删除
+          </span>
+        </a-space>
+      </div>
+      <a-empty v-if="!logLoading && !logs.length" description="暂无执行日志（自动化执行后自动产生）" />
+      <div v-for="log in logs" :key="log.id" class="log-item">
+        <div class="log-head">
+          <a-tag :color="resultColor(log.result)">{{ resultLabel(log.result) }}</a-tag>
+          <span class="log-time">{{ logTimeRange(log) }}</span>
+          <span class="log-tester">测试人：{{ log.tester_name || '-' }}</span>
+          <div class="log-head-right">
+            <a-popconfirm
+              v-if="!log.is_latest"
+              title="确定删除这条历史执行日志？"
+              @confirm="handleDeleteLog(log)"
+              v-permission="'plan:case:execute'"
+            >
+              <a-tooltip :title="log.is_latest ? '最新一次执行日志不允许删除' : ''">
+                <a-button
+                  type="link"
+                  size="small"
+                  danger
+                  :disabled="deletingLogId === log.id"
+                >删除</a-button>
+              </a-tooltip>
+            </a-popconfirm>
+            <a-tag v-else color="blue" style="cursor: not-allowed">最新一次不可删除</a-tag>
+            <a-button type="link" size="small" @click="toggleLog(log.id)">
+              {{ expandedLogId === log.id ? '收起日志' : '展开日志' }}
+            </a-button>
+          </div>
+        </div>
+        <pre v-if="expandedLogId === log.id" class="log-content">{{ log.log_content || '（无日志内容）' }}</pre>
+      </div>
+    </a-drawer>
+
+    <!-- 定时执行任务抽屉 -->
+    <a-drawer
+      v-model:open="scheduleDrawerVisible"
+      title="定时执行任务"
+      width="920px"
+      destroy-on-close
+    >
+      <div class="schedule-toolbar">
+        <a-space>
+          <a-button size="small" :loading="schedulesLoading" @click="loadSchedules">
+            <template #icon><ReloadOutlined /></template>
+            刷新
+          </a-button>
+          <span class="schedule-tip">
+            任务到点后自动串行执行该计划下的自动化用例，同一时间仅允许一轮执行
+          </span>
+        </a-space>
+        <a-button
+          type="primary"
+          size="small"
+          @click="openScheduleModal()"
+          v-permission="'plan:schedule:create'"
+        >
+          <template #icon><PlusOutlined /></template>
+          新建定时执行
+        </a-button>
+      </div>
+      <a-table
+        :columns="scheduleColumns"
+        :data-source="schedules"
+        :loading="schedulesLoading"
+        :pagination="false"
+        row-key="id"
+        size="middle"
+        :scroll="{ x: 1000 }"
+      >
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.key === 'name'">
+            <span :title="record.description || record.name">{{ record.name }}</span>
+          </template>
+          <template v-else-if="column.key === 'cron'">
+            <code class="cron-text">{{ record.cron_expr }}</code>
+          </template>
+          <template v-else-if="column.key === 'mode'">
+            <a-tag v-if="record.mode === 'full'" color="blue">全量</a-tag>
+            <a-tag v-else color="orange">指定 {{ record.case_ids ? record.case_ids.length : 0 }} 条</a-tag>
+          </template>
+          <template v-else-if="column.key === 'next'">
+            <span v-if="!record.enabled" class="muted">已停用</span>
+            <span v-else-if="record.is_running">执行中</span>
+            <span v-else>{{ record.next_run_at ? formatDate(record.next_run_at) : '-' }}</span>
+          </template>
+          <template v-else-if="column.key === 'last'">
+            <template v-if="record.is_running">
+              <a-tag color="processing">执行中</a-tag>
+            </template>
+            <template v-else>
+              <a-tag v-if="record.last_status" :color="scheduleStatusColor(record.last_status)">
+                {{ scheduleStatusLabel(record.last_status) }}
+              </a-tag>
+              <span v-if="record.last_skip_reason" class="skip-reason" :title="record.last_skip_reason">
+                {{ record.last_skip_reason }}
+              </span>
+              <div class="schedule-last-time">
+                {{ record.last_run_at ? formatDate(record.last_run_at) : '尚未运行' }}
+              </div>
+            </template>
+          </template>
+          <template v-else-if="column.key === 'enabled'">
+            <a-switch
+              size="small"
+              :checked="record.enabled"
+              :loading="togglingId === record.id"
+              @change="handleToggleSchedule(record)"
+              v-permission="'plan:schedule:update'"
+            />
+          </template>
+          <template v-else-if="column.key === 'action'">
+            <a-space :wrap="false">
+              <a-button
+                type="link"
+                size="small"
+                :loading="runningNowId === record.id"
+                :disabled="record.is_running"
+                @click="handleRunNow(record)"
+                v-permission="'plan:case:execute'"
+              >立即执行</a-button>
+              <a-button
+                type="link"
+                size="small"
+                @click="openScheduleModal(record)"
+                v-permission="'plan:schedule:update'"
+              >编辑</a-button>
+              <a-popconfirm title="确定删除该定时执行任务？" @confirm="handleDeleteSchedule(record)">
+                <a-button type="link" size="small" danger v-permission="'plan:schedule:delete'">删除</a-button>
+              </a-popconfirm>
+            </a-space>
+          </template>
+        </template>
+      </a-table>
+    </a-drawer>
+
+    <!-- 新建/编辑定时执行弹窗 -->
+    <a-modal
+      v-model:open="scheduleModalVisible"
+      :title="scheduleForm.id ? '编辑定时执行任务' : '新建定时执行任务'"
+      @ok="handleSaveSchedule"
+      :confirm-loading="scheduleSaving"
+      width="640px"
+    >
+      <a-form :model="scheduleForm" :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
+        <a-form-item label="任务名称" required>
+          <a-input v-model:value="scheduleForm.name" maxlength="100" placeholder="如：每日凌晨2点回归" />
+        </a-form-item>
+        <a-form-item label="cron 表达式" required>
+          <a-input v-model:value="scheduleForm.cron_expr" placeholder="分 时 日 月 周，如：0 2 * * *" />
+          <div class="cron-hint">
+            示例：<code>0 2 * * *</code> 每天 02:00；<code>*/10 * * * *</code> 每 10 分钟；
+            支持 5 段（分 时 日 月 周）或 6 段（含秒）
+          </div>
+        </a-form-item>
+        <a-form-item label="执行范围" required>
+          <a-radio-group v-model:value="scheduleForm.mode" button-style="solid">
+            <a-radio-button value="full">全量执行</a-radio-button>
+            <a-radio-button value="custom">指定用例</a-radio-button>
+          </a-radio-group>
+          <div class="cron-hint">
+            {{ scheduleForm.mode === 'full'
+              ? '执行计划内所有已配置模块编码/用例编码的自动化用例'
+              : '仅执行下方勾选的自动化用例（需已配置模块编码/用例编码）' }}
+          </div>
+        </a-form-item>
+        <a-form-item v-if="scheduleForm.mode === 'custom'" label="选择用例" required>
+          <a-select
+            v-model:value="scheduleForm.case_ids"
+            mode="multiple"
+            style="width: 100%"
+            :options="scheduleCandidateOptions"
+            :loading="scheduleCandidatesLoading"
+            placeholder="从计划内可自动化的用例中选择"
+            option-filter-prop="label"
+            :max-tag-count="6"
+            allow-clear
+          />
+          <div class="cron-hint">计划内可自动化用例共 {{ scheduleCandidates.length }} 条</div>
+        </a-form-item>
+        <a-form-item label="任务说明">
+          <a-textarea v-model:value="scheduleForm.description" :rows="2" maxlength="500" placeholder="可选" />
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
   <a-result v-else-if="pageError" status="warning" title="计划加载失败">
     <template #subTitle>{{ pageError }}</template>
@@ -264,7 +487,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { PlusOutlined, ArrowLeftOutlined, EditOutlined, DownloadOutlined } from '@ant-design/icons-vue'
+import { PlusOutlined, ArrowLeftOutlined, EditOutlined, DownloadOutlined, ReloadOutlined, FieldTimeOutlined } from '@ant-design/icons-vue'
 import {
   getPlan,
   updatePlan,
@@ -277,7 +500,15 @@ import {
   executePlanTestcase,
   batchExecutePlanTestcases,
   stopPlanExecution,
-  exportPlanTestcases
+  exportPlanTestcases,
+  getCaseExecutionLogs,
+  deleteCaseExecutionLog,
+  getPlanSchedules,
+  createPlanSchedule,
+  updatePlanSchedule,
+  togglePlanSchedule,
+  deletePlanSchedule,
+  runPlanScheduleNow
 } from '@/api/plan'
 import { useAuthStore } from '@/stores/auth'
 import dayjs from 'dayjs'
@@ -373,14 +604,35 @@ function openEditModal() {
   Object.assign(editForm, {
     name: plan.value.name,
     status: plan.value.status,
-    description: plan.value.description || ''
+    description: plan.value.description || '',
+    robot_ids: plan.value.robot_ids || []
   })
   editModalVisible.value = true
 }
 
 const editModalVisible = ref(false)
 const editLoading = ref(false)
-const editForm = reactive({ name: '', status: 'not_started', description: '' })
+const editForm = reactive({ name: '', status: 'not_started', description: '', robot_ids: [] })
+
+// 机器人下拉（详情编辑始终为编辑态：允许保留已停用的历史绑定）
+const robotOptions = ref([]) // [{id,name,enabled}]
+const robotSelectOptions = computed(() =>
+  robotOptions.value.map(r => ({ value: r.id, label: r.enabled ? r.name : `${r.name}（已停用）`, enabled: r.enabled }))
+)
+
+function isDisabledRobot(id) {
+  const r = robotOptions.value.find(item => item.id === id)
+  return !!r && !r.enabled
+}
+
+async function loadRobots() {
+  try {
+    const res = await getRobotOptions()
+    robotOptions.value = res.data || []
+  } catch (e) {
+    // 下拉加载失败不阻塞
+  }
+}
 
 async function handleEditPlan() {
   if (!editForm.name) {
@@ -392,7 +644,8 @@ async function handleEditPlan() {
     await updatePlan(planId, {
       name: editForm.name,
       status: editForm.status,
-      description: editForm.description
+      description: editForm.description,
+      robot_ids: editForm.robot_ids
     })
     message.success('更新成功')
     editModalVisible.value = false
@@ -417,7 +670,7 @@ const columns = [
   { title: '结果', dataIndex: 'result', key: 'result', width: 90 },
   { title: '结果描述', dataIndex: 'result_desc', key: 'result_desc', width: 120, ellipsis: true },
   { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 170 },
-  { title: '操作', key: 'action', width: 260, fixed: 'right' }
+  { title: '操作', key: 'action', width: 320, fixed: 'right' }
 ]
 
 const tableData = ref([])
@@ -634,6 +887,230 @@ async function handleStopExecution() {
   }
 }
 
+// ---------- 定时执行 ----------
+const scheduleDrawerVisible = ref(false)
+const schedulesLoading = ref(false)
+const schedules = ref([])
+const togglingId = ref(null)
+const runningNowId = ref(null)
+const scheduleCandidatesLoading = ref(false)
+const scheduleCandidates = ref([])
+const scheduleModalVisible = ref(false)
+const scheduleSaving = ref(false)
+const scheduleForm = reactive({
+  id: null,
+  name: '',
+  cron_expr: '',
+  mode: 'full',
+  case_ids: [],
+  description: ''
+})
+
+const scheduleCandidateOptions = computed(() =>
+  scheduleCandidates.value.map(t => ({
+    value: t.testcase_id,
+    label: t.title || `用例#${t.testcase_id}`
+  }))
+)
+
+const scheduleColumns = [
+  { title: '任务名称', dataIndex: 'name', key: 'name', width: 170, ellipsis: true },
+  { title: 'cron 表达式', dataIndex: 'cron_expr', key: 'cron', width: 130 },
+  { title: '执行范围', key: 'mode', width: 110 },
+  { title: '下次执行', key: 'next', width: 165 },
+  { title: '最近执行', key: 'last', width: 220 },
+  { title: '启用', key: 'enabled', width: 70, align: 'center' },
+  { title: '操作', key: 'action', width: 200, fixed: 'right' }
+]
+
+function scheduleStatusLabel(status) {
+  return { ok: '成功', skipped: '已跳过', error: '失败' }[status] || status || '未运行'
+}
+function scheduleStatusColor(status) {
+  return { ok: 'success', skipped: 'warning', error: 'error' }[status] || 'default'
+}
+
+async function loadSchedules() {
+  schedulesLoading.value = true
+  try {
+    const res = await getPlanSchedules(planId)
+    schedules.value = res.data || []
+  } catch (e) {
+    // 错误已由拦截器提示
+  } finally {
+    schedulesLoading.value = false
+  }
+}
+
+async function loadScheduleCandidates() {
+  scheduleCandidatesLoading.value = true
+  const all = []
+  try {
+    // 复用计划用例接口循环分页拉全量，仅保留已配置模块编码/用例编码（可自动化执行）的用例
+    let total = Infinity
+    for (let page = 1; page <= 30 && all.length < total; page++) {
+      const res = await getPlanTestcases(planId, { page, page_size: 100 })
+      const items = res.data.items || []
+      total = res.data.total ?? total
+      all.push(...items)
+      if (items.length < 100) break
+    }
+    scheduleCandidates.value = all.filter(t => t.module_code && t.case_code)
+  } catch (e) {
+    scheduleCandidates.value = []
+  } finally {
+    scheduleCandidatesLoading.value = false
+  }
+}
+
+async function openScheduleDrawer() {
+  scheduleDrawerVisible.value = true
+  loadSchedules()
+  loadScheduleCandidates()
+}
+
+function openScheduleModal(schedule) {
+  Object.assign(scheduleForm, {
+    id: schedule ? schedule.id : null,
+    name: schedule ? schedule.name : '',
+    cron_expr: schedule ? schedule.cron_expr : '',
+    mode: schedule ? schedule.mode : 'full',
+    case_ids: schedule && schedule.case_ids ? [...schedule.case_ids] : [],
+    description: schedule ? schedule.description || '' : ''
+  })
+  scheduleModalVisible.value = true
+}
+
+async function handleSaveSchedule() {
+  const f = scheduleForm
+  if (!f.name || !f.name.trim()) {
+    message.warning('请填写任务名称')
+    return
+  }
+  if (!f.cron_expr || !f.cron_expr.trim()) {
+    message.warning('请填写 cron 表达式')
+    return
+  }
+  if (f.mode === 'custom' && (!f.case_ids || !f.case_ids.length)) {
+    message.warning('指定用例模式至少选择一个用例')
+    return
+  }
+  scheduleSaving.value = true
+  try {
+    const data = {
+      name: f.name.trim(),
+      cron_expr: f.cron_expr.trim(),
+      mode: f.mode,
+      description: f.description || null
+    }
+    if (f.mode === 'custom') data.case_ids = f.case_ids
+    if (f.id) {
+      await updatePlanSchedule(planId, f.id, data)
+      message.success('更新成功')
+    } else {
+      await createPlanSchedule(planId, data)
+      message.success('创建成功，将按 cron 表达式定时自动执行')
+    }
+    scheduleModalVisible.value = false
+    loadSchedules()
+  } catch (e) {
+    // 错误已由拦截器提示
+  } finally {
+    scheduleSaving.value = false
+  }
+}
+
+async function handleToggleSchedule(record) {
+  togglingId.value = record.id
+  try {
+    const res = await togglePlanSchedule(planId, record.id)
+    message.success(res.data.enabled ? '已启用定时执行' : '已停用定时执行')
+    // 就地回写行数据（含重算后的下次执行时间）
+    Object.assign(record, res.data)
+  } catch (e) {
+    // 错误已由拦截器提示
+  } finally {
+    togglingId.value = null
+  }
+}
+
+async function handleRunNow(record) {
+  runningNowId.value = record.id
+  try {
+    await runPlanScheduleNow(planId, record.id)
+    message.success('已触发立即执行，用例将串行执行，请稍后刷新查看结果')
+    loadSchedules()
+    loadTestcases()
+  } catch (e) {
+    // 错误已由拦截器提示
+  } finally {
+    runningNowId.value = null
+  }
+}
+
+async function handleDeleteSchedule(record) {
+  try {
+    await deletePlanSchedule(planId, record.id)
+    message.success('删除成功')
+    loadSchedules()
+  } catch (e) {
+    // 错误已由拦截器提示
+  }
+}
+
+// ---------- 历史执行日志 ----------
+const logDrawerVisible = ref(false)
+const logDrawerTitle = ref('执行日志')
+const logRecord = reactive({ ptc_id: null, title: '' })
+const logs = ref([])
+const logLoading = ref(false)
+const deletingLogId = ref(null)
+const expandedLogId = ref(null)
+
+function logTimeRange(log) {
+  const start = log.started_at ? dayjs(log.started_at).format('MM-DD HH:mm:ss') : ''
+  const end = log.finished_at ? dayjs(log.finished_at).format('MM-DD HH:mm:ss') : ''
+  if (start && end && start !== end) return `${start} ~ ${end}`
+  return start || end || '-'
+}
+
+function openLogDrawer(record) {
+  logRecord.ptc_id = record.id
+  logRecord.title = record.title
+  logDrawerTitle.value = `执行日志 · ${record.title || `#${record.id}`}`
+  logs.value = []
+  expandedLogId.value = null
+  logDrawerVisible.value = true
+  loadLogs()
+}
+
+async function loadLogs() {
+  logLoading.value = true
+  try {
+    const res = await getCaseExecutionLogs(planId, logRecord.ptc_id)
+    logs.value = res.data || []
+  } finally {
+    logLoading.value = false
+  }
+}
+
+function toggleLog(logId) {
+  expandedLogId.value = expandedLogId.value === logId ? null : logId
+}
+
+async function handleDeleteLog(log) {
+  deletingLogId.value = log.id
+  try {
+    await deleteCaseExecutionLog(planId, logRecord.ptc_id, log.id)
+    message.success('历史执行日志已删除')
+    if (expandedLogId.value === log.id) expandedLogId.value = null
+    await loadLogs()
+    loadTestcases()
+  } finally {
+    deletingLogId.value = null
+  }
+}
+
 const caseDetailVisible = ref(false)
 const caseDetail = reactive({
   title: '', module: '', priority: '', case_type: '', source: '', status: '',
@@ -660,6 +1137,7 @@ onMounted(async () => {
   loadPlan()
   loadTesterOptions()
   loadTestcases()
+  loadRobots()
 })
 </script>
 
@@ -710,6 +1188,17 @@ onMounted(async () => {
   color: #999;
   font-size: 13px;
 }
+.robot-line {
+  margin-top: 2px;
+}
+.form-tip {
+  font-size: 12px;
+  color: #999;
+  margin-top: 4px;
+}
+.opt-disabled {
+  color: #bbb;
+}
 .header-actions {
   display: flex;
   align-items: center;
@@ -754,5 +1243,98 @@ onMounted(async () => {
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
+}
+.log-toolbar {
+  margin-bottom: 12px;
+}
+.log-tip {
+  color: #999;
+  font-size: 12px;
+}
+.log-item {
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.log-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px 12px;
+  background: #fafafa;
+}
+.log-time {
+  color: #666;
+  font-size: 12px;
+  margin: 0 8px 0 4px;
+}
+.log-tester {
+  color: #999;
+  font-size: 12px;
+  margin-right: 4px;
+}
+.log-head-right {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.log-content {
+  margin: 0;
+  padding: 12px;
+  max-height: 60vh;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.schedule-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.schedule-tip {
+  color: #999;
+  font-size: 12px;
+}
+.schedule-last-time {
+  color: #999;
+  font-size: 12px;
+  line-height: 18px;
+  margin-top: 2px;
+}
+.skip-reason {
+  color: #d4a017;
+  font-size: 12px;
+  margin-left: 6px;
+  display: inline-block;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.cron-hint {
+  color: #999;
+  font-size: 12px;
+  margin-top: 4px;
+}
+.cron-text {
+  background: #f5f5f5;
+  border: 1px solid #f0f0f0;
+  border-radius: 2px;
+  padding: 0 4px;
+  font-family: 'Consolas', 'Monaco', monospace;
+}
+.muted {
+  color: #bbb;
 }
 </style>

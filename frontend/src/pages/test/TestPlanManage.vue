@@ -58,6 +58,14 @@
             <span v-if="!record.case_count" style="color: #999">暂无用例</span>
           </a-space>
         </template>
+        <template v-if="column.key === 'robots'">
+          <a-space :size="4" wrap>
+            <a-tag v-for="r in (record.robots || [])" :key="r.id" color="cyan" style="margin-right: 0">
+              {{ r.name }}
+            </a-tag>
+            <span v-if="!(record.robot_ids || []).length" style="color: #999">未配置</span>
+          </a-space>
+        </template>
         <template v-if="column.key === 'updated_at'">
           {{ formatDate(record.updated_at) }}
         </template>
@@ -101,6 +109,23 @@
         <a-form-item label="计划描述">
           <a-textarea v-model:value="formState.description" :rows="3" placeholder="请输入计划说明（测试范围/依据等）" />
         </a-form-item>
+        <a-divider style="margin: 8px 0">结果推送（企业微信群机器人）</a-divider>
+        <a-form-item label="推送机器人">
+          <a-select
+            v-model:value="formState.robot_ids"
+            mode="multiple"
+            :options="robotSelectOptions"
+            placeholder="批量/定时执行完成后推送统计到群，不选则不推送"
+            style="width: 100%"
+            allow-clear
+            :max-tag-count="4"
+          >
+            <template #option="{ value, label }">
+              <span :class="{ 'opt-disabled': isDisabledRobot(value) }">{{ label }}</span>
+            </template>
+          </a-select>
+          <div class="form-tip">仅在「批量执行」或「定时执行」整轮结束后推送一次统计（含失败明细）</div>
+        </a-form-item>
       </a-form>
     </a-modal>
   </div>
@@ -113,6 +138,7 @@ import { message } from 'ant-design-vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { getPlans, createPlan, updatePlan, deletePlan } from '@/api/plan'
 import { getAllProjects } from '@/api/project'
+import { getRobotOptions } from '@/api/wecomRobot'
 import dayjs from 'dayjs'
 
 const router = useRouter()
@@ -152,11 +178,23 @@ const pagination = reactive({
 })
 
 const projectOptions = ref([])
+const robotOptions = ref([]) // 原始数据 [{id,name,enabled}]
+const robotSelectOptions = computed(() => {
+  const list = isEdit.value ? robotOptions.value : robotOptions.value.filter(r => r.enabled)
+  return list.map(r => ({ value: r.id, label: r.enabled ? r.name : `${r.name}（已停用）`, enabled: r.enabled }))
+})
+
+function isDisabledRobot(id) {
+  const r = robotOptions.value.find(item => item.id === id)
+  return !!r && !r.enabled
+}
+
 const formState = reactive({
   name: '',
   project_id: null,
   status: 'not_started',
-  description: ''
+  description: '',
+  robot_ids: []
 })
 
 function statusLabel(status) {
@@ -192,6 +230,15 @@ async function loadProjects() {
       value: p.id,
       label: p.name
     }))
+  } catch (e) {
+    // 下拉加载失败不阻塞列表
+  }
+}
+
+async function loadRobots() {
+  try {
+    const res = await getRobotOptions()
+    robotOptions.value = res.data || []
   } catch (e) {
     // 下拉加载失败不阻塞列表
   }
@@ -235,7 +282,8 @@ function openModal(record) {
       name: record.name,
       project_id: record.project_id,
       status: record.status,
-      description: record.description || ''
+      description: record.description || '',
+      robot_ids: record.robot_ids || []
     })
   } else {
     editId.value = null
@@ -243,7 +291,8 @@ function openModal(record) {
       name: '',
       project_id: null,
       status: 'not_started',
-      description: ''
+      description: '',
+      robot_ids: []
     })
   }
   modalVisible.value = true
@@ -260,7 +309,8 @@ async function handleSubmit() {
       await updatePlan(editId.value, {
         name: formState.name,
         description: formState.description,
-        status: formState.status
+        status: formState.status,
+        robot_ids: formState.robot_ids
       })
       message.success('更新成功')
     } else {
@@ -268,7 +318,8 @@ async function handleSubmit() {
         name: formState.name,
         project_id: formState.project_id,
         description: formState.description,
-        status: formState.status
+        status: formState.status,
+        robot_ids: formState.robot_ids
       })
       message.success('创建成功')
     }
@@ -292,6 +343,7 @@ function goDetail(id) {
 onMounted(() => {
   loadData()
   loadProjects()
+  loadRobots()
 })
 </script>
 
@@ -301,5 +353,13 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.form-tip {
+  font-size: 12px;
+  color: #999;
+  margin-top: 4px;
+}
+.opt-disabled {
+  color: #bbb;
 }
 </style>

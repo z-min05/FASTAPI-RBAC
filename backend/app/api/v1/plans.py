@@ -5,15 +5,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.dependency import require_permissions_any, get_current_active_user_any
+from app.dependency import require_permissions_any, get_current_active_user_any, actor_user_id
 from app.models.user import User
 from app.schemas.plan import (
     PlanCreate,
     PlanUpdate,
     PlanTestcaseAddRequest,
     PlanTestcaseResultUpdate,
+    PlanScheduleCreate,
+    PlanScheduleUpdate,
 )
 from app.services.plan_service import PlanService
+from app.services.schedule_service import ScheduleService, trigger_schedule
 from app.core.pagination import PaginationParams
 from app.core.response import Response
 
@@ -200,6 +203,31 @@ async def stop_execution(
     return Response.success(message="已请求停止批量执行，剩余未执行的用例将被跳过")
 
 
+@router.get("/{plan_id}/testcases/{ptc_id}/execution-logs", summary="该计划用例的历史执行日志")
+async def list_execution_logs(
+    plan_id: int,
+    ptc_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("plan:case:list")),
+):
+    service = PlanService(db)
+    logs = await service.list_case_execution_logs(plan_id, ptc_id)
+    return Response.success(data=logs)
+
+
+@router.delete("/{plan_id}/testcases/{ptc_id}/execution-logs/{log_id}", summary="删除历史执行日志（最新一条不允许删除）")
+async def delete_execution_log(
+    plan_id: int,
+    ptc_id: int,
+    log_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("plan:case:execute")),
+):
+    service = PlanService(db)
+    await service.delete_case_execution_log(plan_id, ptc_id, log_id)
+    return Response.success(message="删除成功")
+
+
 @router.get("/{plan_id}/testcases/export", summary="导出计划用例（CSV）")
 async def export_plan_testcases(
     plan_id: int,
@@ -214,3 +242,79 @@ async def export_plan_testcases(
         media_type="text/csv; charset=utf-8-sig",
         headers={"Content-Disposition": f"attachment; filename=plan_{plan_id}_testcases.csv"},
     )
+
+
+# ==================== 定时执行 ====================
+
+@router.get("/{plan_id}/schedules", summary="定时执行任务列表")
+async def list_plan_schedules(
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("plan:schedule:list")),
+):
+    service = ScheduleService(db)
+    return Response.success(data=await service.list_schedules(plan_id))
+
+
+@router.post("/{plan_id}/schedules", summary="创建定时执行任务")
+async def create_plan_schedule(
+    plan_id: int,
+    data: PlanScheduleCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("plan:schedule:create")),
+):
+    service = ScheduleService(db)
+    # created_by 记录归属用户：API 密钥调用时由 actor_user_id 解析为其归属用户
+    result = await service.create_schedule(plan_id, data, actor_user_id(current_user))
+    return Response.success(data=result, message="定时执行任务创建成功")
+
+
+@router.put("/{plan_id}/schedules/{schedule_id}", summary="编辑定时执行任务")
+async def update_plan_schedule(
+    plan_id: int,
+    schedule_id: int,
+    data: PlanScheduleUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("plan:schedule:update")),
+):
+    service = ScheduleService(db)
+    result = await service.update_schedule(plan_id, schedule_id, data)
+    return Response.success(data=result, message="更新成功")
+
+
+@router.patch("/{plan_id}/schedules/{schedule_id}/toggle", summary="启用/停用定时执行任务")
+async def toggle_plan_schedule(
+    plan_id: int,
+    schedule_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("plan:schedule:update")),
+):
+    service = ScheduleService(db)
+    result = await service.toggle_schedule(plan_id, schedule_id)
+    return Response.success(data=result, message="已启用" if result["enabled"] else "已停用")
+
+
+@router.delete("/{plan_id}/schedules/{schedule_id}", summary="删除定时执行任务")
+async def delete_plan_schedule(
+    plan_id: int,
+    schedule_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("plan:schedule:delete")),
+):
+    service = ScheduleService(db)
+    await service.delete_schedule(plan_id, schedule_id)
+    return Response.success(message="删除成功")
+
+
+@router.post("/{plan_id}/schedules/{schedule_id}/run-now", summary="立即执行一轮定时任务")
+async def run_schedule_now(
+    plan_id: int,
+    schedule_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("plan:case:execute")),
+):
+    # 校验任务归属（plan_id/schedule_id）
+    service = ScheduleService(db)
+    await service.get_schedule(plan_id, schedule_id)
+    await trigger_schedule(schedule_id, manual=True)
+    return Response.success(message="已提交定时执行（立即触发一轮），请稍后刷新查看结果")

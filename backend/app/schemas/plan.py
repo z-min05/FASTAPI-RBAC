@@ -14,6 +14,8 @@ class PlanBase(BaseModel):
     project_id: int = Field(..., description="所属项目 ID")
     description: str | None = Field(None, description="计划说明")
     status: str = Field("not_started", description="计划状态：not_started/in_progress/completed")
+    # 结果推送：绑定的企业微信群机器人 id 列表（空/缺省表示不推送）
+    robot_ids: list[int] | None = Field(None, description="绑定的企业微信群机器人 id 列表")
 
 
 class PlanCreate(PlanBase):
@@ -25,6 +27,7 @@ class PlanUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
     description: str | None = None
     status: str | None = None
+    robot_ids: list[int] | None = Field(None, description="绑定的企业微信群机器人 id 列表")
 
 
 class PlanResponse(BaseModel):
@@ -37,6 +40,9 @@ class PlanResponse(BaseModel):
     status: str
     case_count: int = 0
     result_stats: dict = Field(default_factory=lambda: {k: 0 for k in RESULT_STAT_KEYS})
+    # 绑定的机器人（编辑回显 + 名称展示）
+    robot_ids: list[int] | None = None
+    robots: list[dict] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -79,3 +85,62 @@ class TesterOption(BaseModel):
     id: int
     username: str
     nickname: str | None = None
+
+
+class CaseExecutionLogResponse(BaseModel):
+    """用例执行日志（每次执行一条，保留历史）"""
+    id: int
+    plan_id: int
+    plan_testcase_id: int
+    result: str | None = None
+    log_content: str | None = None
+    tester_id: int | None = None
+    tester_name: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+    is_latest: bool = False
+
+
+# ==================== 定时执行 ====================
+ALLOWED_SCHEDULE_MODES = ["full", "custom"]
+
+
+class PlanScheduleBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, description="任务名称")
+    cron_expr: str = Field(..., max_length=50, description="cron 表达式（5/6 段）")
+    mode: str = Field("full", description="full=全量 / custom=指定用例子集")
+    case_ids: list[int] | None = Field(None, description="mode=custom 时的计划内用例 id 列表")
+    description: str | None = Field(None, max_length=500, description="说明")
+
+
+class PlanScheduleCreate(PlanScheduleBase):
+    pass
+
+
+class PlanScheduleUpdate(BaseModel):
+    """编辑定时任务（全字段可选，仅更新传入字段）"""
+    name: str | None = Field(None, min_length=1, max_length=100)
+    cron_expr: str | None = Field(None, max_length=50)
+    mode: str | None = None
+    case_ids: list[int] | None = None
+    description: str | None = Field(None, max_length=500)
+
+
+class PlanScheduleResponse(BaseModel):
+    id: int
+    plan_id: int
+    created_by: int | None = None
+    name: str
+    cron_expr: str
+    mode: str
+    case_ids: list[int] | None = None
+    enabled: bool = True
+    description: str | None = None
+    is_running: bool = False
+    last_run_at: datetime | None = None
+    last_status: str | None = None
+    last_skip_reason: str | None = None
+    next_run_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime

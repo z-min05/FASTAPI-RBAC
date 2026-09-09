@@ -63,3 +63,39 @@ export function stopPlanExecution(planId) {
 export function exportPlanTestcases(planId) {
   return request.get(`/plans/${planId}/testcases/export`, { responseType: 'blob' })
 }
+
+// ==================== 用例执行日志（历史） ====================
+
+export function getCaseExecutionLogs(planId, ptcId) {
+  return request.get(`/plans/${planId}/testcases/${ptcId}/execution-logs`)
+}
+
+export function deleteCaseExecutionLog(planId, ptcId, logId) {
+  return request.delete(`/plans/${planId}/testcases/${ptcId}/execution-logs/${logId}`)
+}
+
+// ==================== 定时执行 ====================
+
+export function getPlanSchedules(planId) {
+  return request.get(`/plans/${planId}/schedules`)
+}
+
+export function createPlanSchedule(planId, data) {
+  return request.post(`/plans/${planId}/schedules`, data)
+}
+
+export function updatePlanSchedule(planId, scheduleId, data) {
+  return request.put(`/plans/${planId}/schedules/${scheduleId}`, data)
+}
+
+export function togglePlanSchedule(planId, scheduleId) {
+  return request.patch(`/plans/${planId}/schedules/${scheduleId}/toggle`)
+}
+
+export function deletePlanSchedule(planId, scheduleId) {
+  return request.delete(`/plans/${planId}/schedules/${scheduleId}`)
+}
+
+export function runPlanScheduleNow(planId, scheduleId) {
+  return request.post(`/plans/${planId}/schedules/${scheduleId}/run-now`)
+}

@@ -1,6 +1,8 @@
 """v1.0.0 initial schema
 
 合并并压扁开发阶段的 8 个增量迁移，创建当前最终完整表结构。
+（后续 v1.0.1 api_keys、v1.0.2 case_execution_logs 亦已压扁合并进本文件，
+  整个 versions 目录只保留这一个迁移文件。）
 
 Revision ID: 0001_v1_0_0_initial
 Revises: None
@@ -12,6 +14,7 @@ Create Date: 2026-09-04
   （无 agent_key，包含 agent_id / config_hash / config_snapshot）
 - 跳过 0007/0008 的 add_column：projects 直接包含 python_path / auto_root_path，
   testcases 直接包含 module_code / case_code
+- case_execution_logs 为 v1.0.2 新增（用例执行完整日志），压扁进本迁移
 """
 from typing import Sequence, Union
 
@@ -370,8 +373,38 @@ def upgrade() -> None:
     op.create_index('ix_api_keys_key_hash', 'api_keys', ['key_hash'], unique=True)
     op.create_index('ix_api_keys_role_id', 'api_keys', ['role_id'])
 
+    # ==================== v1.0.2：用例执行日志（压扁 0002） ====================
+    op.create_table(
+        'case_execution_logs',
+        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+        sa.Column('plan_id', sa.Integer(), nullable=False),
+        sa.Column('plan_testcase_id', sa.Integer(), nullable=False),
+        sa.Column('run_token', sa.String(length=64), nullable=False),
+        sa.Column('result', sa.String(length=20), nullable=True),
+        sa.Column('log_content', sa.Text(), nullable=True),
+        sa.Column('tester_id', sa.Integer(), nullable=True),
+        sa.Column('started_at', sa.DateTime(), nullable=True),
+        sa.Column('finished_at', sa.DateTime(), nullable=True),
+        sa.ForeignKeyConstraint(['plan_id'], ['plans.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['plan_testcase_id'], ['plan_testcases.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['tester_id'], ['users.id'], ondelete='SET NULL'),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('ix_case_execution_logs_plan_id', 'case_execution_logs', ['plan_id'])
+    op.create_index(
+        'ix_case_execution_logs_plan_testcase_id',
+        'case_execution_logs',
+        ['plan_testcase_id'],
+    )
+
 
 def downgrade() -> None:
+    # 反向顺序删除（最新创建的表最先删）
+    op.drop_index('ix_case_execution_logs_plan_testcase_id', table_name='case_execution_logs')
+    op.drop_index('ix_case_execution_logs_plan_id', table_name='case_execution_logs')
+    op.drop_table('case_execution_logs')
     # 反向顺序删除
     op.drop_index('ix_api_keys_role_id', table_name='api_keys')
     op.drop_index('ix_api_keys_key_hash', table_name='api_keys')

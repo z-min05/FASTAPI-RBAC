@@ -15,6 +15,10 @@ from app.models.agent_token_record import AgentTokenRecord
 from app.models.agent_llm import AgentLlm
 from app.models.agent_definition import AgentDefinition
 from app.models.api_key import ApiKey
+from app.models.case_execution_log import CaseExecutionLog
+from app.models.plan import TestPlan
+from app.models.plan_testcase import PlanTestCase
+from app.models.plan_schedule import PlanSchedule
 
 __all__ = [
     "User",
@@ -36,4 +40,7 @@ __all__ = [
     "AgentLlm",
     "AgentDefinition",
     "ApiKey",
+    "CaseExecutionLog",
+    "PlanSchedule",
+    "WecomRobot",
 ]

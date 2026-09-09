@@ -1,4 +1,6 @@
+import asyncio
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from app.config import settings
@@ -12,6 +14,7 @@ from app.utils.redis import close_redis
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    scheduler_task = None
     logger.info(f"{settings.APP_NAME} 启动中...")
     # 初始化 Casbin 并同步策略
     try:
@@ -22,7 +25,23 @@ async def lifespan(app: FastAPI):
         logger.info("Casbin 权限策略同步完成")
     except Exception as e:
         logger.warning(f"Casbin 初始化失败（权限功能可能不可用）: {e}")
+
+    # 启动内嵌调度器（单 worker/多 worker 下均通过 DB 条件更新防重复触发）
+    if settings.SCHEDULER_ENABLED:
+        try:
+            from app.services.scheduler import scheduler_loop
+            scheduler_task = asyncio.create_task(scheduler_loop())
+        except Exception as e:
+            logger.warning(f"定时执行调度器启动失败: {e}")
+
     yield
+
+    if scheduler_task:
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
+        except (asyncio.CancelledError, Exception):
+            pass
     await close_redis()
     logger.info(f"{settings.APP_NAME} 关闭中...")
 

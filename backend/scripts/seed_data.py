@@ -44,6 +44,10 @@ TEST_PERMISSIONS = [
     {"name": "记录结果", "code": "plan:case:result", "module": "plan", "action": "case:result"},
     {"name": "执行自动化用例", "code": "plan:case:execute", "module": "plan", "action": "case:execute"},
     {"name": "移除计划用例", "code": "plan:case:remove", "module": "plan", "action": "case:remove"},
+    {"name": "定时执行列表", "code": "plan:schedule:list", "module": "plan", "action": "schedule:list"},
+    {"name": "新建定时执行", "code": "plan:schedule:create", "module": "plan", "action": "schedule:create"},
+    {"name": "编辑定时执行", "code": "plan:schedule:update", "module": "plan", "action": "schedule:update"},
+    {"name": "删除定时执行", "code": "plan:schedule:delete", "module": "plan", "action": "schedule:delete"},
 ]
 
 TEST_MENUS = [
@@ -85,6 +89,10 @@ TEST_MENUS = [
                     {"name": "记录结果", "menu_type": "button", "permission": "plan:case:result", "sort": 5},
                     {"name": "执行用例", "menu_type": "button", "permission": "plan:case:execute", "sort": 6},
                     {"name": "移除用例", "menu_type": "button", "permission": "plan:case:remove", "sort": 7},
+                    {"name": "定时执行", "menu_type": "button", "permission": "plan:schedule:list", "sort": 8},
+                    {"name": "新建定时执行", "menu_type": "button", "permission": "plan:schedule:create", "sort": 9},
+                    {"name": "编辑定时执行", "menu_type": "button", "permission": "plan:schedule:update", "sort": 10},
+                    {"name": "删除定时执行", "menu_type": "button", "permission": "plan:schedule:delete", "sort": 11},
                 ],
             },
         ],
@@ -202,25 +210,6 @@ AGENT_PERMISSIONS = [
     {"name": "新增 LLM 配置", "code": "agent:llm:create", "module": "agent", "action": "create"},
     {"name": "编辑 LLM 配置", "code": "agent:llm:update", "module": "agent", "action": "update"},
     {"name": "删除 LLM 配置", "code": "agent:llm:delete", "module": "agent", "action": "delete"},
-]
-
-AGENT_MENUS = [
-    {
-        "name": "AI 助手", "path": "/agent", "icon": "RobotOutlined",
-        "menu_type": "directory", "sort": 4, "visible": True,
-        "children": [
-            {
-                "name": "LLM 配置", "path": "/agent/llms", "component": "agent/LlmManage",
-                "icon": "ApiOutlined", "menu_type": "menu", "sort": 1,
-                "permission": "agent:llm:list", "visible": True,
-                "children": [
-                    {"name": "新增 LLM", "menu_type": "button", "permission": "agent:llm:create", "sort": 1},
-                    {"name": "编辑 LLM", "menu_type": "button", "permission": "agent:llm:update", "sort": 2},
-                    {"name": "删除 LLM", "menu_type": "button", "permission": "agent:llm:delete", "sort": 3},
-                ],
-            },
-        ],
-    },
 ]
 
 AGENT_MENUS = [
@@ -366,6 +355,122 @@ API_KEY_MENU_CHILDREN = [
     {"name": "删除密钥", "menu_type": "button", "permission": "api-key:delete", "sort": 3},
 ]
 
+# ==================== 企业微信群机器人模块定义 ====================
+WECOM_ROBOT_PERMISSIONS = [
+    {"name": "企业微信群机器人列表", "code": "wecom-robot:list", "module": "wecom_robot", "action": "list"},
+    {"name": "新增企业微信群机器人", "code": "wecom-robot:create", "module": "wecom_robot", "action": "create"},
+    {"name": "编辑企业微信群机器人", "code": "wecom-robot:update", "module": "wecom_robot", "action": "update"},
+    {"name": "删除企业微信群机器人", "code": "wecom-robot:delete", "module": "wecom_robot", "action": "delete"},
+]
+
+WECOM_ROBOT_MENU_CHILDREN = [
+    {"name": "新增机器人", "menu_type": "button", "permission": "wecom-robot:create", "sort": 1},
+    {"name": "编辑机器人", "menu_type": "button", "permission": "wecom-robot:update", "sort": 2},
+    {"name": "删除机器人", "menu_type": "button", "permission": "wecom-robot:delete", "sort": 3},
+]
+
+
+async def _ensure_wecom_module(db):
+    """幂等创建企业微信群机器人模块的权限、菜单（含按钮）与角色授权"""
+    # 1. 权限
+    perm_objs = {}
+    for p in WECOM_ROBOT_PERMISSIONS:
+        result = await db.execute(select(Permission).where(Permission.code == p["code"]))
+        perm = result.scalar_one_or_none()
+        if not perm:
+            perm = Permission(**p)
+            db.add(perm)
+            await db.flush()
+        perm_objs[p["code"]] = perm
+
+    # 2. 菜单：查找系统管理目录，在其下添加企业微信机器人菜单
+    sys_dir = await db.execute(
+        select(Menu).where(Menu.path == "/system", Menu.menu_type == "directory")
+    )
+    sys_dir = sys_dir.scalar_one_or_none()
+    if not sys_dir:
+        return
+
+    wecom_menu = await db.execute(
+        select(Menu).where(Menu.path == "/system/wecom-robots", Menu.parent_id == sys_dir.id)
+    )
+    wecom_menu = wecom_menu.scalar_one_or_none()
+    if not wecom_menu:
+        max_sort_result = await db.execute(
+            select(func.max(Menu.sort)).where(Menu.parent_id == sys_dir.id)
+        )
+        max_sort = max_sort_result.scalar() or 0
+        wecom_menu = Menu(
+            name="企业微信机器人", path="/system/wecom-robots", component="system/wecom-robots/index",
+            icon="RobotOutlined", menu_type="menu", parent_id=sys_dir.id,
+            sort=max_sort + 1, permission="wecom-robot:list",
+        )
+        db.add(wecom_menu)
+        await db.flush()
+
+    module_menus = [wecom_menu]
+
+    # 按钮
+    for btn_def in WECOM_ROBOT_MENU_CHILDREN:
+        result = await db.execute(
+            select(Menu).where(
+                Menu.name == btn_def["name"],
+                Menu.parent_id == wecom_menu.id,
+                Menu.menu_type == "button",
+            )
+        )
+        btn = result.scalar_one_or_none()
+        if not btn:
+            btn = Menu(
+                name=btn_def["name"], menu_type="button",
+                permission=btn_def["permission"], parent_id=wecom_menu.id, sort=btn_def["sort"],
+            )
+            db.add(btn)
+            await db.flush()
+        module_menus.append(btn)
+
+    # 3. 角色授权（admin 全量；user 仅列表权限与菜单可见）
+    admin_role = (await db.execute(select(Role).where(Role.code == "admin"))).scalar_one_or_none()
+    user_role = (await db.execute(select(Role).where(Role.code == "user"))).scalar_one_or_none()
+
+    for code, perm in perm_objs.items():
+        if admin_role:
+            r = await db.execute(
+                select(role_permissions).where(
+                    role_permissions.c.role_id == admin_role.id,
+                    role_permissions.c.permission_id == perm.id,
+                )
+            )
+            if not r.first():
+                await db.execute(
+                    role_permissions.insert().values(role_id=admin_role.id, permission_id=perm.id)
+                )
+        if user_role and code.endswith(":list"):
+            r = await db.execute(
+                select(role_permissions).where(
+                    role_permissions.c.role_id == user_role.id,
+                    role_permissions.c.permission_id == perm.id,
+                )
+            )
+            if not r.first():
+                await db.execute(
+                    role_permissions.insert().values(role_id=user_role.id, permission_id=perm.id)
+                )
+
+    for m in module_menus:
+        if admin_role:
+            r = await db.execute(
+                select(role_menus).where(role_menus.c.role_id == admin_role.id, role_menus.c.menu_id == m.id)
+            )
+            if not r.first():
+                await db.execute(role_menus.insert().values(role_id=admin_role.id, menu_id=m.id))
+        if user_role and m.menu_type != "button":
+            r = await db.execute(
+                select(role_menus).where(role_menus.c.role_id == user_role.id, role_menus.c.menu_id == m.id)
+            )
+            if not r.first():
+                await db.execute(role_menus.insert().values(role_id=user_role.id, menu_id=m.id))
+
 
 async def _ensure_api_key_module(db):
     """幂等创建 API 密钥模块的权限、菜单（含按钮）与角色授权"""
@@ -481,10 +586,11 @@ async def seed():
         result = await db.execute(select(User).limit(1))
         if result.scalar_one_or_none():
             # 已有数据：增量补充新增模块的权限/菜单/角色授权（幂等）
-            print("检测到已有数据，增量补充测试管理/AI 助手/API 密钥模块权限/菜单")
+            print("检测到已有数据，增量补充测试管理/AI 助手/API 密钥/企业微信机器人模块权限/菜单")
             await _ensure_test_module(db)
             await _ensure_agent_module(db)
             await _ensure_api_key_module(db)
+            await _ensure_wecom_module(db)
             await db.commit()
             await _sync_casbin(db)
             print("增量补充完成")
@@ -768,6 +874,9 @@ async def seed():
         # ==================== 部门 ====================
         root_dept = Department(name="总公司", code="HQ", sort=0, leader="admin")
         db.add(root_dept)
+
+        # 全新安装：企业微信群机器人模块（权限/菜单/按钮/角色授权）
+        await _ensure_wecom_module(db)
 
         await db.commit()
         print("种子数据初始化完成")
