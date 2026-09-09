@@ -290,7 +290,7 @@
           </span>
         </a-space>
       </div>
-      <a-empty v-if="!logLoading && !logs.length" description="暂无执行日志（自动化执行后自动产生）" />
+      <a-empty v-if="!logLoading && !logs.length" description="暂无执行日志（自动化执行或手动记录结果后自动产生）" />
       <div v-for="log in logs" :key="log.id" class="log-item">
         <div class="log-head">
           <a-tag :color="resultColor(log.result)">{{ resultLabel(log.result) }}</a-tag>

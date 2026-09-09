@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import datetime
 
 import csv
@@ -292,7 +293,11 @@ class PlanService:
         result_desc: str | None,
         current_user: User,
     ) -> PlanTestCase:
-        """记录/修改测试结果，测试人直接设为当前用户"""
+        """记录/修改测试结果，测试人直接设为当前用户。
+
+        手动记录也会写入一条完整执行日志（内容为结果描述原文），
+        与自动化执行共用 case_execution_logs，保证结果记录永远对应最新一次记录。
+        """
         plan = await self.get_plan(plan_id)
         pt = await self.pt_repo.get_by_id(ptc_id)
         if not pt or pt.plan_id != plan.id:
@@ -307,6 +312,22 @@ class PlanService:
             updates["result_desc"] = result_desc
         updates["tester_id"] = current_user.id
         updated = await self.pt_repo.update(pt.id, updates)
+
+        # 手动记录同样写入一条完整执行日志（保留历史，最新一条在前且不可删）
+        effective_desc = (getattr(updated, "result_desc", None) or "").strip()
+        self.db.add(
+            CaseExecutionLog(
+                plan_id=plan.id,
+                plan_testcase_id=pt.id,
+                run_token=f"manual-{uuid.uuid4().hex[:24]}",
+                result=getattr(updated, "result", None),
+                log_content=effective_desc or f"手动记录结果：{getattr(updated, 'result', None)}",
+                tester_id=current_user.id,
+                started_at=datetime.now(),
+                finished_at=datetime.now(),
+            )
+        )
+        await self.db.commit()
         return updated
 
     async def remove_testcase(self, plan_id: int, ptc_id: int) -> None:

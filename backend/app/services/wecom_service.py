@@ -353,7 +353,8 @@ async def notify_plan_finished(
                     title = (tc.title if tc else "未知用例")
                     title = title if len(title) <= _TITLE_CUT else title[:_TITLE_CUT] + "…"
                     desc = (pt.result_desc or "").replace("\n", " ").strip()
-                    desc = desc if len(desc) <= _DESC_CUT else desc[:_DESC_CUT] + "…"
+                    # 结果记录为完整日志时，取末尾（错误摘要/失败原因通常在最末）更有价值
+                    desc = desc if len(desc) <= _DESC_CUT else "…" + desc[-_DESC_CUT:]
                     failures.append((label, title, desc))
 
             content = _build_notify_message(

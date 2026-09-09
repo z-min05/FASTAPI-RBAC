@@ -3,7 +3,7 @@
 通过 subprocess 调用 pytest 执行单个用例函数，异步完成后更新数据库：
 - 子进程注入 PLATFORM_EXEC=1，自动化框架的 loguru 只向 stdout 输出（不再写日志文件）
 - 平台逐行接收 stdout 作为该用例完整日志
-- plan_testcases.result_desc 只存短摘要，完整日志写入 case_execution_logs（保留历史）
+- plan_testcases.result_desc 保存最新一次执行的完整日志；case_execution_logs 保留全部历史
 """
 import asyncio
 import os
@@ -163,7 +163,7 @@ async def _save_execution_result(
     started_at: datetime,
     finished_at: datetime,
 ) -> None:
-    """更新计划用例结果为短摘要，并将完整日志写入 case_execution_logs"""
+    """更新计划用例结果为完整执行日志，并同样写入 case_execution_logs（保留历史）"""
     from sqlalchemy.ext.asyncio import AsyncSession
     from app.models.plan_testcase import PlanTestCase
     from app.models.case_execution_log import CaseExecutionLog
@@ -174,7 +174,8 @@ async def _save_execution_result(
         if not pt or pt.plan_id != plan_id:
             return
         pt.result = result
-        pt.result_desc = summary
+        # 结果记录永远保存最新一次执行的完整日志（不再存简化摘要）
+        pt.result_desc = log_text
         if tester_id:
             pt.tester_id = tester_id
         session.add(CaseExecutionLog(
