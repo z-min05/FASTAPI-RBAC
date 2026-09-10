@@ -51,6 +51,12 @@
         </a-button>
         <a-button @click="handleImport" v-permission="'testcase:import'">导入</a-button>
         <a-button @click="handleExport" v-permission="'testcase:export'">导出</a-button>
+        <a-button
+          v-if="canSync"
+          v-permission="'testcase:sync'"
+          :loading="syncing"
+          @click="handleSync"
+        >同步用例</a-button>
       </a-space>
     </div>
 
@@ -214,12 +220,14 @@ import { PlusOutlined, UploadOutlined, DownloadOutlined } from '@ant-design/icon
 import {
   getTestcases, getTestcaseModules, getTestcase,
   createTestcase, updateTestcase, deleteTestcase,
-  batchDeleteTestcases, exportTestcases, importTestcases, getImportTemplate
+  batchDeleteTestcases, exportTestcases, importTestcases, getImportTemplate,
+  syncTestcases
 } from '@/api/testcase'
 import { getAllProjects } from '@/api/project'
 import dayjs from 'dayjs'
 
 const loading = ref(false)
+const syncing = ref(false)
 const submitLoading = ref(false)
 const formVisible = ref(false)
 const detailVisible = ref(false)
@@ -361,7 +369,10 @@ async function loadData() {
 async function loadProjects() {
   try {
     const res = await getAllProjects()
-    projectOptions.value = (res.data || []).map(p => ({ label: p.name, value: p.id }))
+    // 保留 auto_root_path，用于判断是否显示「同步用例」按钮
+    projectOptions.value = (res.data || []).map(p => ({
+      label: p.name, value: p.id, auto_root_path: p.auto_root_path
+    }))
     // 有项目时默认选中第一个项目进行筛选；没有任何项目时才不选择
     if (!filters.project_id && projectOptions.value.length) {
       filters.project_id = projectOptions.value[0].value
@@ -610,6 +621,25 @@ async function handleExport() {
   link.download = data.filename || 'testcases.csv'
   link.click()
   URL.revokeObjectURL(link.href)
+}
+
+// 仅当选中项目且该项目已配置自动化根路径时显示「同步用例」
+const canSync = computed(() => {
+  const cur = projectOptions.value.find(p => p.value === filters.project_id)
+  return !!(cur && cur.auto_root_path)
+})
+
+async function handleSync() {
+  if (!filters.project_id || syncing.value) return
+  syncing.value = true
+  try {
+    const res = await syncTestcases(filters.project_id)
+    message.success(res.message || '已下发同步任务，请稍后刷新查看用例情况')
+    // 后台异步同步，稍后自动刷新一次列表
+    setTimeout(() => { loadData() }, 3000)
+  } finally {
+    setTimeout(() => { syncing.value = false }, 3000)
+  }
 }
 
 onMounted(() => {

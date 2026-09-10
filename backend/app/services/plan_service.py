@@ -92,7 +92,8 @@ class PlanService:
         stats = await self.pt_repo.stats_by_plans([plan.id])
         project_map = await self._get_project_map([plan.project_id])
         robot_map = await self._get_robot_map(plan.robot_ids or [])
-        return self._to_plan_response(plan, project_map, stats.get(plan.id), robot_map)
+        agent_map = await self._get_agent_name_map([plan.agent_id])
+        return self._to_plan_response(plan, project_map, stats.get(plan.id), robot_map, agent_map)
 
     async def _get_project_map(self, project_ids: list[int]) -> dict[int, Project]:
         ids = list(set(project_ids))
@@ -123,16 +124,30 @@ class PlanService:
         rows = (await self.db.execute(select(WecomRobot.id, WecomRobot.name).where(WecomRobot.id.in_(ids)))).all()
         return {r.id: r.name for r in rows}
 
+    async def _get_agent_name_map(self, agent_ids) -> dict[int, str]:
+        from app.models.agent_definition import AgentDefinition
+        ids = list({i for i in (agent_ids or []) if i})
+        if not ids:
+            return {}
+        rows = (
+            await self.db.execute(
+                select(AgentDefinition.id, AgentDefinition.name).where(AgentDefinition.id.in_(ids))
+            )
+        ).all()
+        return {r.id: r.name for r in rows}
+
     def _to_plan_response(
         self,
         plan: TestPlan,
         project_map: dict[int, Project],
         stats: dict | None,
         robot_map: dict[int, str] | None = None,
+        agent_map: dict[int, str] | None = None,
     ) -> dict:
         proj = project_map.get(plan.project_id)
         stat = stats or {"case_count": 0, "result_stats": _empty_stats()}
         robot_map = robot_map or {}
+        agent_map = agent_map or {}
         robots = [
             {"id": rid, "name": robot_map.get(rid, f"#{rid}")}
             for rid in (plan.robot_ids or [])
@@ -149,6 +164,9 @@ class PlanService:
             result_stats=stat["result_stats"],
             robot_ids=plan.robot_ids,
             robots=robots,
+            agent_id=plan.agent_id,
+            agent_name=agent_map.get(plan.agent_id) if plan.agent_id else None,
+            agent_conversation_id=plan.agent_conversation_id,
             created_at=plan.created_at,
             updated_at=plan.updated_at,
         ).model_dump()
@@ -168,23 +186,70 @@ class PlanService:
         if status not in ALLOWED_PLAN_STATUS:
             raise BadRequestException(f"计划状态不合法，应为: {', '.join(ALLOWED_PLAN_STATUS)}")
 
-    async def create_plan(self, data: PlanCreate) -> TestPlan:
+    async def create_plan(self, data: PlanCreate, user_id: int | None = None) -> TestPlan:
         await self._ensure_project_active(data.project_id)
         self._validate_status(data.status)
         await self._validate_robot_ids(data.robot_ids)
-        plan = TestPlan(**data.model_dump())
-        return await self.plan_repo.create(plan)
+        payload = data.model_dump()
+        agent_id = payload.pop("agent_id", None)
+        plan = TestPlan(**payload)
+        created = await self.plan_repo.create(plan)
+        await self._apply_agent_binding(user_id, created, agent_id)
+        await self.db.flush()
+        await self.db.refresh(created)
+        return created
 
-    async def update_plan(self, plan_id: int, data: PlanUpdate) -> TestPlan:
+    async def update_plan(
+        self, plan_id: int, data: PlanUpdate, user_id: int | None = None
+    ) -> TestPlan:
         plan = await self.get_plan(plan_id)
         update_data = data.model_dump(exclude_unset=True)
         if "status" in update_data:
             self._validate_status(update_data["status"])
         if "robot_ids" in update_data:
             await self._validate_robot_ids(update_data["robot_ids"])
-        # 所属项目不可变更：直接忽略 project_id（schema 亦不含该字段）
+        # agent 绑定单独编排（repo 会忽略 None 值，无法借此清空），先取出
+        has_agent = "agent_id" in update_data
+        agent_id = update_data.pop("agent_id", None)
         updated = await self.plan_repo.update(plan.id, update_data)
+        if has_agent:
+            await self._apply_agent_binding(user_id, updated, agent_id)
+            await self.db.flush()
+            await self.db.refresh(updated)
         return updated
+
+    async def _create_agent_conversation(self, user_id: int, agent_id: int, plan_name: str):
+        """创建计划绑定的 AI 汇总会话（仅自身，借由 AgentService 统一校验 Agent 归属/可用）"""
+        from app.services.agent_service import AgentService
+        from app.schemas.agent import ConversationCreate
+
+        svc = AgentService(self.db)
+        conv = await svc.create_conversation(
+            user_id,
+            ConversationCreate(agent_id=agent_id, title=f"测试计划：{plan_name} 结果汇总"),
+        )
+        return conv
+
+    async def _apply_agent_binding(
+        self, user_id: int | None, plan: TestPlan, agent_id: int | None
+    ) -> None:
+        """按 agent_id 编排会话绑定：新计划/变更 → 新建会话；未变 → 沿用；空 → 解绑。
+
+        - 旧会话一律保留（D2：历史对话留档，仅解绑引用）
+        - 绑定 Agent 需要真实用户（actor_user_id 有效），API Key 无归属用户时拒绝
+        """
+        if not agent_id:
+            plan.agent_id = None
+            plan.agent_conversation_id = None
+            return
+        if user_id is None:
+            raise BadRequestException("绑定 AI 汇总 Agent 需使用真实登录用户操作")
+        # 未变更且已有会话 → 沿用，不重建
+        if plan.agent_id == agent_id and plan.agent_conversation_id:
+            return
+        conv = await self._create_agent_conversation(user_id, agent_id, plan.name)
+        plan.agent_id = agent_id
+        plan.agent_conversation_id = conv.id
 
     async def delete_plan(self, plan_id: int) -> None:
         plan = await self.get_plan(plan_id)

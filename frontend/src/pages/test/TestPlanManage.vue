@@ -126,6 +126,16 @@
           </a-select>
           <div class="form-tip">仅在「批量执行」或「定时执行」整轮结束后推送一次统计（含失败明细）</div>
         </a-form-item>
+        <a-form-item v-if="agentOptionsLoaded" label="AI 结果汇总">
+          <a-select
+            v-model:value="formState.agent_id"
+            :options="agentSelectOptions"
+            placeholder="选一个当前用户的 Agent，批量/定时执行完成后由 AI 汇总测试结果再推送"
+            style="width: 100%"
+            allow-clear
+          />
+          <div class="form-tip">保存时会自动为该 Agent 创建会话；AI 返回异常时自动回退为统计推送</div>
+        </a-form-item>
       </a-form>
     </a-modal>
   </div>
@@ -139,6 +149,7 @@ import { PlusOutlined } from '@ant-design/icons-vue'
 import { getPlans, createPlan, updatePlan, deletePlan } from '@/api/plan'
 import { getAllProjects } from '@/api/project'
 import { getRobotOptions } from '@/api/wecomRobot'
+import { listAgents } from '@/api/agent'
 import dayjs from 'dayjs'
 
 const router = useRouter()
@@ -179,6 +190,11 @@ const pagination = reactive({
 
 const projectOptions = ref([])
 const robotOptions = ref([]) // 原始数据 [{id,name,enabled}]
+const agentOptions = ref([]) // 当前用户 Agent [{id,name,enabled}]
+const agentOptionsLoaded = ref(false) // Agent 服务未启用/加载失败时为 false（隐藏选择）
+const agentSelectOptions = computed(() =>
+  agentOptions.value.map(a => ({ value: a.id, label: a.enabled ? a.name : `${a.name}（已停用）` }))
+)
 const robotSelectOptions = computed(() => {
   const list = isEdit.value ? robotOptions.value : robotOptions.value.filter(r => r.enabled)
   return list.map(r => ({ value: r.id, label: r.enabled ? r.name : `${r.name}（已停用）`, enabled: r.enabled }))
@@ -244,6 +260,17 @@ async function loadRobots() {
   }
 }
 
+async function loadAgents() {
+  try {
+    const res = await listAgents({ scope: 'mine', page_size: 50 })
+    agentOptions.value = (res.data?.items || []).map(a => ({ id: a.id, name: a.name, enabled: a.enabled }))
+    agentOptionsLoaded.value = true
+  } catch (e) {
+    // Agent 服务未启用/加载失败时隐藏选择，不阻塞列表
+    agentOptionsLoaded.value = false
+  }
+}
+
 async function loadData() {
   loading.value = true
   try {
@@ -283,7 +310,8 @@ function openModal(record) {
       project_id: record.project_id,
       status: record.status,
       description: record.description || '',
-      robot_ids: record.robot_ids || []
+      robot_ids: record.robot_ids || [],
+      agent_id: record.agent_id ?? null
     })
   } else {
     editId.value = null
@@ -292,7 +320,8 @@ function openModal(record) {
       project_id: null,
       status: 'not_started',
       description: '',
-      robot_ids: []
+      robot_ids: [],
+      agent_id: null
     })
   }
   modalVisible.value = true
@@ -310,7 +339,8 @@ async function handleSubmit() {
         name: formState.name,
         description: formState.description,
         status: formState.status,
-        robot_ids: formState.robot_ids
+        robot_ids: formState.robot_ids,
+        agent_id: formState.agent_id ?? null
       })
       message.success('更新成功')
     } else {
@@ -319,7 +349,8 @@ async function handleSubmit() {
         project_id: formState.project_id,
         description: formState.description,
         status: formState.status,
-        robot_ids: formState.robot_ids
+        robot_ids: formState.robot_ids,
+        agent_id: formState.agent_id ?? null
       })
       message.success('创建成功')
     }
@@ -344,6 +375,7 @@ onMounted(() => {
   loadData()
   loadProjects()
   loadRobots()
+  loadAgents()
 })
 </script>
 

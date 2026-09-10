@@ -12,6 +12,7 @@
             <span class="plan-name" :title="plan.name">{{ plan.name }}</span>
             <a-tag color="blue">{{ plan.project_name || `#${plan.project_id}` }}</a-tag>
             <a-tag :color="statusColor(plan.status)">{{ statusLabel(plan.status) }}</a-tag>
+            <a-tag v-if="plan.agent_name" color="purple">AI 汇总：{{ plan.agent_name }}</a-tag>
           </div>
           <div class="plan-count">已加入 {{ plan.case_count }} 条用例</div>
         </div>
@@ -160,6 +161,16 @@
             </template>
           </a-select>
           <div class="form-tip">仅在「批量执行」或「定时执行」整轮结束后推送一次统计（含失败明细）</div>
+        </a-form-item>
+        <a-form-item v-if="agentOptionsLoaded" label="AI 结果汇总">
+          <a-select
+            v-model:value="editForm.agent_id"
+            :options="agentSelectOptions"
+            placeholder="选一个当前用户的 Agent，整轮执行完成后由 AI 汇总结果再推送"
+            style="width: 100%"
+            allow-clear
+          />
+          <div class="form-tip">保存时会自动为该 Agent 创建会话；AI 返回异常时自动回退为统计推送</div>
         </a-form-item>
       </a-form>
     </a-modal>
@@ -511,6 +522,8 @@ import {
   runPlanScheduleNow
 } from '@/api/plan'
 import { useAuthStore } from '@/stores/auth'
+import { listAgents } from '@/api/agent'
+import { getRobotOptions } from '@/api/wecomRobot'
 import dayjs from 'dayjs'
 
 const route = useRoute()
@@ -605,14 +618,32 @@ function openEditModal() {
     name: plan.value.name,
     status: plan.value.status,
     description: plan.value.description || '',
-    robot_ids: plan.value.robot_ids || []
+    robot_ids: plan.value.robot_ids || [],
+    agent_id: plan.value.agent_id ?? null
   })
   editModalVisible.value = true
 }
 
 const editModalVisible = ref(false)
 const editLoading = ref(false)
-const editForm = reactive({ name: '', status: 'not_started', description: '', robot_ids: [] })
+const editForm = reactive({ name: '', status: 'not_started', description: '', robot_ids: [], agent_id: null })
+
+// Agent 下拉（当前用户 Agent；Agent 服务未启用时隐藏）
+const agentOptions = ref([])
+const agentOptionsLoaded = ref(false)
+const agentSelectOptions = computed(() =>
+  agentOptions.value.map(a => ({ value: a.id, label: a.enabled ? a.name : `${a.name}（已停用）` }))
+)
+
+async function loadAgents() {
+  try {
+    const res = await listAgents({ scope: 'mine', page_size: 50 })
+    agentOptions.value = (res.data?.items || []).map(a => ({ id: a.id, name: a.name, enabled: a.enabled }))
+    agentOptionsLoaded.value = true
+  } catch (e) {
+    agentOptionsLoaded.value = false
+  }
+}
 
 // 机器人下拉（详情编辑始终为编辑态：允许保留已停用的历史绑定）
 const robotOptions = ref([]) // [{id,name,enabled}]
@@ -645,7 +676,8 @@ async function handleEditPlan() {
       name: editForm.name,
       status: editForm.status,
       description: editForm.description,
-      robot_ids: editForm.robot_ids
+      robot_ids: editForm.robot_ids,
+      agent_id: editForm.agent_id ?? null
     })
     message.success('更新成功')
     editModalVisible.value = false
@@ -817,7 +849,7 @@ const resultModalVisible = ref(false)
 const resultSaving = ref(false)
 const resultForm = reactive({ ptc_id: null, title: '', result: null, result_desc: '' })
 
-function openResultModal(record) {
+async function openResultModal(record) {
   Object.assign(resultForm, {
     ptc_id: record.id,
     title: record.title,
@@ -825,6 +857,17 @@ function openResultModal(record) {
     result_desc: record.result_desc || ''
   })
   resultModalVisible.value = true
+  // 用最新一次执行日志（完整内容）预填结果描述，避免只显示自动化执行的简化摘要
+  try {
+    const res = await getCaseExecutionLogs(planId, record.id)
+    const latest = (res.data || [])[0]
+    if (latest) {
+      if (latest.result) resultForm.result = latest.result
+      if (latest.log_content) resultForm.result_desc = latest.log_content
+    }
+  } catch (e) {
+    // 拉取失败忽略，保留默认值
+  }
 }
 
 async function handleSaveResult() {
@@ -1138,6 +1181,7 @@ onMounted(async () => {
   loadTesterOptions()
   loadTestcases()
   loadRobots()
+  loadAgents()
 })
 </script>
 

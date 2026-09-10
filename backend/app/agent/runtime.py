@@ -141,12 +141,32 @@ def _get_or_build(spec: dict) -> _Instance:
         return inst
 
 
+# Agent 构建超时上限（秒）。构建含 PG Checkpointer 首次连接/建表，
+# 是同步阻塞操作且本身没有超时；一旦挂起会导致调用方永久等待
+# （通知场景会因此既不推 AI 结果也不回退统计）。这里显式限时。
+_BUILD_TIMEOUT = 30.0
+
+
+async def _build_instance_async(spec: dict) -> _Instance:
+    """线程池内构建实例并限时，超时按推理失败处理（上层可回退统计推送）。"""
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_get_or_build, spec), timeout=_BUILD_TIMEOUT
+        )
+    except asyncio.TimeoutError as exc:
+        raise AgentInvokeError(
+            f"Agent 初始化超时（>{_BUILD_TIMEOUT:.0f}s）", timed_out=True
+        ) from exc
+
+
 async def run_round(spec: dict, input_data: dict, config: dict) -> tuple[Any, list]:
     """执行一轮对话（串行）：reset -> invoke(线程池+超时) -> drain。
 
     成功返回 (result, token_records)；失败抛 AgentInvokeError（records 已捕获）。
     """
-    inst = _get_or_build(spec)
+    # 构建（含 PG Checkpointer 首次连接/建表）是同步阻塞操作，放线程池并限时执行，
+    # 否则会阻塞事件循环或无限期挂起
+    inst = await _build_instance_async(spec)
     timeout = get_agent_config().invoke_timeout
 
     async with _round_lock:
@@ -500,7 +520,8 @@ async def stream_round(spec: dict, input_data: dict, config: dict) -> Any:
     失败（含超时）抛出 AgentInvokeError（records 为已采集的 Token 记录）。
     与 run_round 共用 _round_lock，保证 PG 连接与账本单飞。
     """
-    inst = _get_or_build(spec)
+    # 同 run_round：构建为同步阻塞操作，放线程池并限时执行
+    inst = await _build_instance_async(spec)
     timeout = get_agent_config().invoke_timeout
 
     async with _round_lock:

@@ -16,6 +16,8 @@ class PlanBase(BaseModel):
     status: str = Field("not_started", description="计划状态：not_started/in_progress/completed")
     # 结果推送：绑定的企业微信群机器人 id 列表（空/缺省表示不推送）
     robot_ids: list[int] | None = Field(None, description="绑定的企业微信群机器人 id 列表")
+    # AI 结果汇总：绑定的 Agent id（保存时自动创建会话，执行完成后由 Agent 汇总再推送）
+    agent_id: int | None = Field(None, description="绑定的 AI 结果汇总 Agent id")
 
 
 class PlanCreate(PlanBase):
@@ -28,6 +30,7 @@ class PlanUpdate(BaseModel):
     description: str | None = None
     status: str | None = None
     robot_ids: list[int] | None = Field(None, description="绑定的企业微信群机器人 id 列表")
+    agent_id: int | None = Field(None, description="绑定的 AI 结果汇总 Agent id（null 表示解绑）")
 
 
 class PlanResponse(BaseModel):
@@ -43,6 +46,11 @@ class PlanResponse(BaseModel):
     # 绑定的机器人（编辑回显 + 名称展示）
     robot_ids: list[int] | None = None
     robots: list[dict] = Field(default_factory=list)
+    # 绑定的 AI 结果汇总 Agent（编辑回显 + 名称展示）
+    agent_id: int | None = None
+    agent_name: str | None = None
+    # 保存计划时自动创建的汇总会话 id（服务端派生，只读回显，前端不作为入参）
+    agent_conversation_id: int | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -3,6 +3,7 @@
 - 发送走 httpx（异步），失败仅记录日志，不阻塞/不重试（用"发送测试消息"验证配置）
 - webhook_url 含敏感 key 参数，对外一律脱敏；secret 使用 Fernet 加密存储
 """
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -27,8 +28,12 @@ from app.models.testcase import TestCase
 from app.models.user import User
 from app.utils.logger import logger
 
+# 企业微信群机器人 text 单条上限（官方 2048 字节）
+MAX_TEXT_BYTES = 2048
 # 企业微信群机器人 markdown 单条上限（保守取整）
 MAX_MESSAGE_BYTES = 4000
+# 限频：每分钟 ≤ 20 条 → 条间最小间隔（秒）
+RATE_LIMIT_INTERVAL = 3.0
 # 失败/阻塞明细最多列出条数
 MAX_FAILURE_ITEMS = 10
 # 标题/描述截断长度
@@ -87,6 +92,90 @@ async def send_markdown(webhook_url: str, secret: str | None, content: str) -> t
     if data.get("errcode") != 0:
         return False, f"企业微信错误 {data.get('errcode')}: {data.get('errmsg')}"
     return True, "ok"
+
+
+async def send_text(webhook_url: str, secret: str | None, content: str) -> tuple[bool, str]:
+    """发送 text 消息到企业微信群机器人（单条 ≤ 2048 字节），返回 (是否成功, 错误/ok)"""
+    url = webhook_url
+    if secret:
+        ts = str(int(time.time()))
+        sep = "&" if "?" in webhook_url else "?"
+        url = f"{webhook_url}{sep}timestamp={ts}&sign={_sign(ts, secret)}"
+    safe = _truncate_bytes(content, MAX_TEXT_BYTES)
+    payload = {"msgtype": "text", "text": {"content": safe}}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(url, json=payload)
+        if resp.status_code != 200:
+            return False, f"HTTP {resp.status_code}"
+        data = resp.json()
+    except Exception as e:
+        return False, f"请求异常: {e}"
+    if data.get("errcode") != 0:
+        return False, f"企业微信错误 {data.get('errcode')}: {data.get('errmsg')}"
+    return True, "ok"
+
+
+def _split_long_line(line: str, max_bytes: int) -> list[str]:
+    """字节安全切分超长单行：不拆断 UTF-8 多字节字符，返回多段"""
+    pieces = []
+    raw = line.encode("utf-8")
+    start, n = 0, len(raw)
+    while start < n:
+        end = min(start + max_bytes, n)
+        while end > start:
+            try:
+                raw[start:end].decode("utf-8")
+                break
+            except UnicodeDecodeError:
+                end -= 1
+        pieces.append(raw[start:end].decode("utf-8"))
+        start = end
+    return pieces
+
+
+def _split_by_bytes(text: str, max_bytes: int) -> list[str]:
+    """按 max_bytes 字节上限把 text 切为多条，尽量在换行处断开；内容完整保留"""
+    chunks: list[str] = []
+    buf = ""
+    for line in text.split("\n"):
+        if len(line.encode("utf-8")) <= max_bytes:
+            candidate = f"{buf}\n{line}" if buf else line
+            if len(candidate.encode("utf-8")) <= max_bytes:
+                buf = candidate
+            else:
+                if buf:
+                    chunks.append(buf)
+                buf = line
+        else:
+            if buf:
+                chunks.append(buf)
+                buf = ""
+            chunks.extend(_split_long_line(line, max_bytes))
+    if buf:
+        chunks.append(buf)
+    return chunks
+
+
+async def send_multipart_text(
+    webhook_url: str, secret: str | None, content: str
+) -> tuple[int, list[str]]:
+    """把 AI 汇总文本分片（≤2048 字节/条）发送，并遵守每分钟 ≤ 20 条限频。
+
+    返回 (成功条数, 错误列表)。分片内容完整保留，不做丢弃。
+    """
+    parts = _split_by_bytes(content, MAX_TEXT_BYTES)
+    ok_count = 0
+    errors: list[str] = []
+    for i, part in enumerate(parts):
+        ok, err = await send_text(webhook_url, secret, part)
+        if ok:
+            ok_count += 1
+        else:
+            errors.append(err)
+        if i < len(parts) - 1:
+            await asyncio.sleep(RATE_LIMIT_INTERVAL)
+    return ok_count, errors
 
 
 def _truncate_bytes(text: str, max_bytes: int = MAX_MESSAGE_BYTES) -> str:
@@ -277,6 +366,53 @@ class WecomRobotService:
         return await send_markdown(robot.webhook_url, decrypt(robot.secret), content)
 
 
+def _one_line(s: str | None) -> str:
+    return " ".join((s or "").strip().split())
+
+
+def _build_agent_prompt(plan: TestPlan, trigger_label: str, rows: list, stat: dict) -> str:
+    """整合本轮已执行用例（标题/预期结果/执行结果/结果描述）为发给 Agent 的 prompt。
+
+    内容全量保留，不做截断；仅把每个字段单行化以便阅读。
+    """
+    lines = [
+        f"测试计划「{plan.name}」本次由“{trigger_label}”触发执行完成，共 {len(rows)} 条用例。",
+        f"统计：通过 {stat['pass']}、失败 {stat['fail']}、阻塞 {stat['blocked']}、"
+        f"跳过 {stat['skipped']}、中断 {stat['interrupted']}。",
+        "请基于下面每条用例的标题、预期结果、实际执行结果与结果描述，归纳测试结论与需要关注的问题。",
+        "用例明细：",
+    ]
+    for i, (pt, tc) in enumerate(rows, start=1):
+        title = _one_line(tc.title) if tc else "未知用例"
+        lines.append(f"{i}. [结果:{pt.result or 'unset'}] {title}")
+        lines.append(f"   预期结果: {_one_line(tc.expected_result) if tc else ''}")
+        if pt.result_desc:
+            lines.append(f"   结果描述: {_one_line(pt.result_desc)}")
+    return "\n".join(lines)
+
+
+async def _call_agent_summary(db, plan: TestPlan, trigger_label: str, rows: list, stat: dict) -> str | None:
+    """非流式调用计划绑定的 Agent 会话获取汇总 reply；失败返回 None（由调用方回退统计）"""
+    from app.models.agent_conversation import AgentConversation
+    from app.services.agent_service import AgentService
+
+    try:
+        conv = await db.get(AgentConversation, plan.agent_conversation_id)
+        if not conv:
+            logger.info(f"计划 {plan.id} 绑定的汇总会话不存在，回退统计推送")
+            return None
+        prompt = _build_agent_prompt(plan, trigger_label, rows, stat)
+        result = await AgentService(db).send_message(conv.user_id, conv.id, prompt)
+        reply = (result.get("reply") or "").strip()
+        if not reply:
+            logger.warning(f"计划 {plan.id} AI 未返回内容，回退统计推送")
+            return None
+        return reply
+    except Exception as e:
+        logger.warning(f"计划 {plan.id} AI 汇总失败，回退统计推送: {e}")
+        return None
+
+
 async def notify_plan_finished(
     plan_id: int,
     trigger_label: str,
@@ -357,31 +493,53 @@ async def notify_plan_finished(
                     desc = desc if len(desc) <= _DESC_CUT else "…" + desc[-_DESC_CUT:]
                     failures.append((label, title, desc))
 
-            content = _build_notify_message(
-                plan_name=plan.name,
-                project_name=project_name,
-                trigger_label=trigger_label,
-                operator=operator,
-                started_at=started_at,
-                finished_at=finished_at,
-                total=len(rows),
-                passed=stat["pass"],
-                failed=stat["fail"],
-                blocked=stat["blocked"],
-                skipped=stat["skipped"],
-                interrupted=stat["interrupted"],
-                failures=failures,
-                plan_id=plan.id,
-            )
+            # AI 汇总优先：绑定会话则调用 Agent 拿 reply；失败自动回退统计
+            ai_reply: str | None = None
+            if plan.agent_conversation_id:
+                ai_reply = await _call_agent_summary(db, plan, trigger_label, rows, stat)
+                # 本会话未走 get_db 依赖，不会自动提交；必须显式提交，
+                # 否则会话关闭时本轮对话消息与 token 记录会被回滚丢弃。
+                # 提交失败仅告警，不能影响后续推送。
+                try:
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+                    logger.warning(f"计划 {plan_id} 汇总对话落库失败，已回滚", exc_info=True)
 
-        # 逐机器人发送（会话已关闭，发送阶段不再依赖 DB）
+            content = None
+            if not ai_reply:
+                content = _build_notify_message(
+                    plan_name=plan.name,
+                    project_name=project_name,
+                    trigger_label=trigger_label,
+                    operator=operator,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    total=len(rows),
+                    passed=stat["pass"],
+                    failed=stat["fail"],
+                    blocked=stat["blocked"],
+                    skipped=stat["skipped"],
+                    interrupted=stat["interrupted"],
+                    failures=failures,
+                    plan_id=plan.id,
+                )
+
+        # 逐机器人发送（会话已关闭，发送阶段不再依赖 DB；AI 文本走分片+限频，统计走单条 markdown）
         logger.info(
             f"计划 {plan_id} 企业微信通知发送开始：{len(robots)} 个机器人，"
             f"用例 {len(rows)}（通过 {stat['pass']}/失败 {stat['fail']}/阻塞 {stat['blocked']}/跳过 {stat['skipped']}）"
+            + ("" if ai_reply else "，AI 汇总失败/未配置，回退统计")
         )
         for robot in robots:
-            ok, err = await send_markdown(robot.webhook_url, decrypt(robot.secret), content)
-            if not ok:
-                logger.error(f"企业微信群机器人「{robot.name}」(id={robot.id}) 推送失败: {err}")
+            secret = decrypt(robot.secret)
+            if ai_reply:
+                ok_count, errors = await send_multipart_text(robot.webhook_url, secret, ai_reply)
+                if not ok_count:
+                    logger.error(f"企业微信群机器人「{robot.name}」(id={robot.id}) AI 推送全失败: {errors}")
+            else:
+                ok, err = await send_markdown(robot.webhook_url, secret, content)
+                if not ok:
+                    logger.error(f"企业微信群机器人「{robot.name}」(id={robot.id}) 推送失败: {err}")
     except Exception as e:  # 通知属旁路，任何异常不得向上抛出
         logger.error(f"计划 {plan_id} 测试结果通知发送异常: {e}")

@@ -11,6 +11,7 @@ from app.models.user import User
 from app.schemas.common import IDListRequest
 from app.schemas.testcase import TestCaseCreate, TestCaseUpdate, TestCaseResponse
 from app.services.testcase_service import TestCaseService
+from app.services.testcase_sync_service import ensure_sync_ready, dispatch_project_sync
 from app.core.pagination import PaginationParams, PaginatedResponse
 from app.core.response import Response
 from app.exceptions import BadRequestException
@@ -59,6 +60,22 @@ async def batch_delete_testcases(
     service = TestCaseService(db)
     count = await service.delete_testcases(data.ids)
     return Response.success(message=f"已删除 {count} 条用例")
+
+
+class SyncRequest(BaseModel):
+    project_id: int
+
+
+@router.post("/sync", summary="同步项目自动化用例")
+async def sync_testcases(
+    data: SyncRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("testcase:sync")),
+):
+    """扫描项目自动化根路径下的 pytest 用例并补齐入库（只新增，异步下发）"""
+    await ensure_sync_ready(db, data.project_id)
+    dispatch_project_sync(data.project_id)
+    return Response.success(message="已下发同步任务，请稍后刷新查看用例情况")
 
 
 @router.get("/import-template", summary="导入模板下载(xlsx)")

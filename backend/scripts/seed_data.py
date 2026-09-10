@@ -34,6 +34,7 @@ TEST_PERMISSIONS = [
     {"name": "删除用例", "code": "testcase:delete", "module": "testcase", "action": "delete"},
     {"name": "用例导出", "code": "testcase:export", "module": "testcase", "action": "export"},
     {"name": "用例导入", "code": "testcase:import", "module": "testcase", "action": "import"},
+    {"name": "同步用例", "code": "testcase:sync", "module": "testcase", "action": "sync"},
     {"name": "测试计划列表", "code": "plan:list", "module": "plan", "action": "list"},
     {"name": "测试计划详情", "code": "plan:detail", "module": "plan", "action": "detail"},
     {"name": "创建测试计划", "code": "plan:create", "module": "plan", "action": "create"},
@@ -75,6 +76,7 @@ TEST_MENUS = [
                     {"name": "删除用例", "menu_type": "button", "permission": "testcase:delete", "sort": 3},
                     {"name": "导入用例", "menu_type": "button", "permission": "testcase:import", "sort": 4},
                     {"name": "导出用例", "menu_type": "button", "permission": "testcase:export", "sort": 5},
+                    {"name": "同步用例", "menu_type": "button", "permission": "testcase:sync", "sort": 6},
                 ],
             },
             {

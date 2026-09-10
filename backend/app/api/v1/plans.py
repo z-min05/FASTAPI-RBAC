@@ -64,7 +64,7 @@ async def create_plan(
     current_user: User = Depends(require_permissions_any("plan:create")),
 ):
     service = PlanService(db)
-    plan = await service.create_plan(data)
+    plan = await service.create_plan(data, actor_user_id(current_user))
     return Response.success(data=await service.get_plan_detail(plan.id))
 
 
@@ -76,7 +76,7 @@ async def update_plan(
     current_user: User = Depends(require_permissions_any("plan:update")),
 ):
     service = PlanService(db)
-    plan = await service.update_plan(plan_id, data)
+    plan = await service.update_plan(plan_id, data, actor_user_id(current_user))
     return Response.success(data=await service.get_plan_detail(plan.id))
 
 

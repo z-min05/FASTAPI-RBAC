@@ -39,3 +39,7 @@ export function getImportTemplate() {
 export function importTestcases(content, format = 'csv') {
   return request.post('/testcases/import', { content, format })
 }
+
+export function syncTestcases(projectId) {
+  return request.post('/testcases/sync', { project_id: projectId })
+}
