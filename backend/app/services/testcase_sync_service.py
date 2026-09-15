@@ -2,27 +2,30 @@
 
 职责：
 - 从项目的自动化根路径（pytest tests 目录）反向扫描测试文件
-- 映射：文件名(去 .py) → module_code；顶层 test_* 函数名 → case_code；@allure.title → title
-- 只新增不修改：同项目下 (module_code, case_code) 已存在则跳过
+- 映射：相对目录链 → 分组模块（逐级 get_or_create），文件名(去 .py) → 末级模块，
+  顶层 test_* 函数名 → case_code；@allure.title → title
+- 只新增不修改：同项目同一末级模块下 case_code 已存在则跳过
 - 异步下发：接口侧调用 dispatch_project_sync 后立即返回，后台任务只记日志
 
 约定：
 - 不导入、不执行被测代码，仅用 ast 静态解析
 - 同步过程不调用 generate_automation_file，绝不改写任何 .py 文件
-- 已存在判定与创建/编辑用例一致：同项目下 (module_code, case_code) 唯一
+- 已存在判定与创建/编辑用例一致：同项目同一末级模块下 case_code 唯一
+- 同步建出的节点 name 取 code 原文（磁盘上的英文名），用户可后续改成中文展示名
 """
 import asyncio
 import ast
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal
 from app.exceptions import BadRequestException
 from app.models.project import Project
 from app.models.testcase import TestCase
-from app.services.auto_file_service import validate_codes
+from app.models.testcase_module import TestCaseModule
+from app.services.auto_file_service import ALLOW_MODULE_DIR_PATTERN, validate_codes
 from app.utils.logger import logger
 
 # 扫描时忽略的目录（含隐藏目录）
@@ -31,7 +34,6 @@ _EXCLUDE_DIRS = {"__pycache__", "venv", ".venv", "node_modules", ".git", "site-p
 _MAX_FILE_BYTES = 2 * 1024 * 1024
 # 同步入库时的默认值（详见设计文档 §1.3）
 _DEFAULT_SOURCE = "自动同步"
-_DEFAULT_MODULE_FALLBACK = "自动同步"
 # 后台任务强引用，避免被 GC 回收
 _running_tasks: set = set()
 
@@ -72,8 +74,9 @@ def scan_test_functions(root: Path) -> tuple[list[dict], list[str]]:
     """扫描根路径下所有 pytest 测试文件的顶层测试函数
 
     返回 (items, failures)：
-    - items: [{file_name, module_code, case_code, title}]
-    - failures: [原因描述]（文件读不了 / 语法错误 / 文件名不合法等，仅记日志）
+    - items: [{rel_dir, file_stem, module_code, case_code, title}]
+      rel_dir 为相对 tests 的目录链（不含文件名），module_code 为相对路径（不含 .py）
+    - failures: [原因描述]（文件读不了 / 语法错误 / 目录名或编码不合法等，仅记日志）
     """
     items: list[dict] = []
     failures: list[str] = []
@@ -93,7 +96,15 @@ def scan_test_functions(root: Path) -> tuple[list[dict], list[str]]:
         if file_path.name == "conftest.py":
             continue
 
-        module_code = file_path.stem
+        # 目录名会成为模块节点，字符集不合法则整条跳过（不建节点）
+        bad_dir = next(
+            (p for p in rel_parts if not ALLOW_MODULE_DIR_PATTERN.fullmatch(p)), None
+        )
+        if bad_dir is not None:
+            failures.append(f"{file_path}: 目录名不合法，已跳过（{bad_dir}）")
+            continue
+
+        module_code = "/".join([*rel_parts, file_path.stem])
         try:
             validate_codes(module_code, None)
         except BadRequestException as e:
@@ -123,13 +134,89 @@ def scan_test_functions(root: Path) -> tuple[list[dict], list[str]]:
                 failures.append(f"{file_path}::{case_code}: {e}")
                 continue
             items.append({
-                "file_name": file_path.name,
+                "rel_dir": rel_parts,
+                "file_stem": file_path.stem,
                 "module_code": module_code,
                 "case_code": case_code,
                 "title": _extract_allure_title(node) or case_code,
             })
 
     return items, failures
+
+
+# ---------- 自动建树 ----------
+
+async def _load_module_cache(
+    db: AsyncSession, project_id: int
+) -> dict[tuple[int | None, str], TestCaseModule]:
+    """加载项目下已有模块，索引为 (parent_id, code)"""
+    stmt = select(TestCaseModule).where(TestCaseModule.project_id == project_id)
+    nodes = list((await db.execute(stmt)).scalars().all())
+    return {(n.parent_id, n.code): n for n in nodes}
+
+
+class _ModuleTreeBuilder:
+    """按磁盘目录层级自动建树（只新增，不改名、不移动）
+
+    - 目录节点与末级文件节点的 name 均取 code 原文，用户可在模块树里改成中文
+    - 若某节点下已挂用例、又需要它充当目录，则跳过该分支并记录原因
+    """
+
+    def __init__(
+        self, db: AsyncSession, project_id: int, cache: dict[tuple[int | None, str], TestCaseModule]
+    ):
+        self.db = db
+        self.project_id = project_id
+        self.cache = cache
+        self.failures: list[str] = []
+        self._groupable: set[int] = set()
+
+    async def ensure_leaf(
+        self, rel_dir: tuple[str, ...], file_stem: str
+    ) -> TestCaseModule | None:
+        parent_id: int | None = None
+        for part in rel_dir:
+            node = await self._get_or_create(parent_id, part)
+            if node is None:
+                return None
+            parent_id = node.id
+        return await self._get_or_create(parent_id, file_stem)
+
+    async def _get_or_create(
+        self, parent_id: int | None, code: str
+    ) -> TestCaseModule | None:
+        node = self.cache.get((parent_id, code))
+        if node is not None:
+            return node
+        if parent_id is not None and not await self._can_group(parent_id):
+            return None
+        node = TestCaseModule(
+            project_id=self.project_id,
+            parent_id=parent_id,
+            name=code,
+            code=code,
+            sort=0,
+        )
+        self.db.add(node)
+        await self.db.flush()
+        self.cache[(parent_id, code)] = node
+        return node
+
+    async def _can_group(self, module_id: int) -> bool:
+        """父节点将变为非末级：它下面不能再有用例"""
+        if module_id in self._groupable:
+            return True
+        count = (await self.db.execute(
+            select(func.count()).select_from(TestCase).where(TestCase.module_id == module_id)
+        )).scalar() or 0
+        if count:
+            self.failures.append(
+                f"模块 id={module_id} 下已有 {count} 条用例，无法作为目录容纳子模块，"
+                "该目录下的文件已跳过"
+            )
+            return False
+        self._groupable.add(module_id)
+        return True
 
 
 # ---------- 校验与下发 ----------
@@ -169,19 +256,28 @@ async def sync_project_testcases(project_id: int) -> None:
             root = Path(project.auto_root_path)
             items, failures = await asyncio.to_thread(scan_test_functions, root)
 
+            cache = await _load_module_cache(db, project_id)
+            builder = _ModuleTreeBuilder(db, project_id, cache)
+
             created = skipped_exists = skipped_invalid = 0
             for item in items:
                 try:
                     validate_codes(item["module_code"], item["case_code"])
                 except BadRequestException as e:
                     skipped_invalid += 1
-                    failures.append(f"{item['file_name']}::{item['case_code']}: {e}")
+                    failures.append(f"{item['module_code']}::{item['case_code']}: {e}")
+                    continue
+
+                # 目录 → 分组节点，文件 → 末级节点（逐级 get_or_create）
+                node = await builder.ensure_leaf(item["rel_dir"], item["file_stem"])
+                if node is None:
+                    skipped_invalid += 1
                     continue
 
                 exists = (await db.execute(
                     select(TestCase.id).where(
                         TestCase.project_id == project_id,
-                        TestCase.module_code == item["module_code"],
+                        TestCase.module_id == node.id,
                         TestCase.case_code == item["case_code"],
                     ).limit(1)
                 )).scalar()
@@ -191,8 +287,10 @@ async def sync_project_testcases(project_id: int) -> None:
 
                 db.add(TestCase(
                     project_id=project_id,
+                    module_id=node.id,
+                    module=node.name,
+                    module_code=item["module_code"],
                     title=item["title"],
-                    module=item["module_code"] or _DEFAULT_MODULE_FALLBACK,
                     priority="P1",
                     case_type="function",
                     source=_DEFAULT_SOURCE,
@@ -201,11 +299,11 @@ async def sync_project_testcases(project_id: int) -> None:
                     expected_result="待补充",
                     status="draft",
                     tags=None,
-                    module_code=item["module_code"],
                     case_code=item["case_code"],
                 ))
                 created += 1
 
+            failures.extend(builder.failures)
             await db.commit()
             logger.info(
                 f"用例同步完成 project={project_id} 路径={root} "

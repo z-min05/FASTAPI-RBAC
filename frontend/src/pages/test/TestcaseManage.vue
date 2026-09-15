@@ -11,14 +11,6 @@
           @change="onProjectChange"
         />
         <a-select
-          v-model:value="filters.module"
-          placeholder="模块"
-          style="width: 140px"
-          allow-clear
-          :options="moduleOptions"
-          @change="onFilterChange"
-        />
-        <a-select
           v-model:value="filters.priority"
           placeholder="优先级"
           style="width: 110px"
@@ -60,42 +52,56 @@
       </a-space>
     </div>
 
-    <a-table
-      :columns="columns"
-      :data-source="tableData"
-      :loading="loading"
-      :pagination="pagination"
-      :row-selection="{ selectedRowKeys, onChange: onSelectChange }"
-      @change="handleTableChange"
-      row-key="id"
-    >
-      <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'project'">
-          <span>{{ record.project_name || record.project_code || '-' }}</span>
-        </template>
-        <template v-if="column.key === 'priority'">
-          <a-tag :color="priorityColor(record.priority)">{{ record.priority }}</a-tag>
-        </template>
-        <template v-if="column.key === 'status'">
-          <a-tag :color="statusColor(record.status)">{{ statusText(record.status) }}</a-tag>
-        </template>
-        <template v-if="column.key === 'case_type'">
-          {{ caseTypeText(record.case_type) }}
-        </template>
-        <template v-if="column.key === 'created_at'">
-          {{ formatDate(record.created_at) }}
-        </template>
-        <template v-if="column.key === 'action'">
-          <a-space>
-            <a-button type="link" size="small" @click="showDetail(record)">详情</a-button>
-            <a-button type="link" size="small" @click="showForm(record)" v-permission="'testcase:update'">编辑</a-button>
-            <a-popconfirm title="确定删除该用例？" @confirm="handleDelete(record.id)">
-              <a-button type="link" size="small" danger v-permission="'testcase:delete'">删除</a-button>
-            </a-popconfirm>
-          </a-space>
-        </template>
-      </template>
-    </a-table>
+    <div class="testcase-body">
+      <div class="module-panel">
+        <TestcaseModuleTree
+          :key="treeVersion"
+          :project-id="filters.project_id"
+          :selected-module-id="filters.module_id"
+          @select="onModuleSelect"
+          @create-case="onCreateCaseFromTree"
+          @changed="onModuleChanged"
+        />
+      </div>
+      <div class="table-panel">
+        <a-table
+          :columns="columns"
+          :data-source="tableData"
+          :loading="loading"
+          :pagination="pagination"
+          :row-selection="{ selectedRowKeys, onChange: onSelectChange }"
+          @change="handleTableChange"
+          row-key="id"
+        >
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'project'">
+              <span>{{ record.project_name || record.project_code || '-' }}</span>
+            </template>
+            <template v-if="column.key === 'priority'">
+              <a-tag :color="priorityColor(record.priority)">{{ record.priority }}</a-tag>
+            </template>
+            <template v-if="column.key === 'status'">
+              <a-tag :color="statusColor(record.status)">{{ statusText(record.status) }}</a-tag>
+            </template>
+            <template v-if="column.key === 'case_type'">
+              {{ caseTypeText(record.case_type) }}
+            </template>
+            <template v-if="column.key === 'created_at'">
+              {{ formatDate(record.created_at) }}
+            </template>
+            <template v-if="column.key === 'action'">
+              <a-space>
+                <a-button type="link" size="small" @click="showDetail(record)">详情</a-button>
+                <a-button type="link" size="small" @click="showForm(record)" v-permission="'testcase:update'">编辑</a-button>
+                <a-popconfirm title="确定删除该用例？" @confirm="handleDelete(record.id)">
+                  <a-button type="link" size="small" danger v-permission="'testcase:delete'">删除</a-button>
+                </a-popconfirm>
+              </a-space>
+            </template>
+          </template>
+        </a-table>
+      </div>
+    </div>
 
     <!-- 详情 -->
     <a-modal v-model:open="detailVisible" title="用例详情" :footer="null" width="720px">
@@ -163,13 +169,22 @@
             :options="projectOptions"
             show-search
             option-filter-prop="label"
+            @change="onFormProjectChange"
           />
         </a-form-item>
         <a-form-item label="标题" required>
           <a-input v-model:value="formState.title" placeholder="请输入用例标题" />
         </a-form-item>
         <a-form-item label="模块" required>
-          <a-input v-model:value="formState.module" placeholder="请输入模块，如 auth / order" />
+          <a-tree-select
+            v-model:value="formState.module_id"
+            placeholder="请选择末级模块"
+            :tree-data="leafModuleOptions"
+            tree-node-filter-prop="label"
+            show-search
+            allow-clear
+            style="width: 100%"
+          />
         </a-form-item>
         <a-form-item label="优先级">
           <a-select v-model:value="formState.priority" :options="priorityOptions" />
@@ -197,7 +212,7 @@
         </a-form-item>
         <a-divider>自动化生成（可选）</a-divider>
         <a-form-item label="模块编码">
-          <a-input v-model:value="formState.module_code" placeholder="pytest 文件名，如 test_device_comm_log（需以 test_ 开头）" />
+          <span class="readonly-text">{{ currentModulePath || '-' }}</span>
         </a-form-item>
         <a-form-item label="用例编码">
           <a-input v-model:value="formState.case_code" placeholder="pytest 函数名，如 test_list_columns（需以 test_ 开头）" />
@@ -218,12 +233,14 @@ import { ref, reactive, computed, h, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined, UploadOutlined, DownloadOutlined } from '@ant-design/icons-vue'
 import {
-  getTestcases, getTestcaseModules, getTestcase,
+  getTestcases, getTestcase,
   createTestcase, updateTestcase, deleteTestcase,
   batchDeleteTestcases, exportTestcases, importTestcases, getImportTemplate,
   syncTestcases
 } from '@/api/testcase'
+import { getModuleTree } from '@/api/testcaseModule'
 import { getAllProjects } from '@/api/project'
+import TestcaseModuleTree from '@/components/TestcaseModuleTree.vue'
 import dayjs from 'dayjs'
 
 const loading = ref(false)
@@ -239,7 +256,12 @@ const editId = ref(null)
 const detail = ref({})
 
 const projectOptions = ref([])
-const moduleOptions = ref([])
+// 当前项目的模块树：供新增/编辑用例弹窗选择末级模块、展示模块路径
+const moduleTree = ref([])
+// 编辑时记录的模块路径，用于模块树里查不到该节点时的兜底展示
+const editModuleCode = ref('')
+// 自增后强制重建左侧模块树（同步用例、模块/用例变更后刷新）
+const treeVersion = ref(0)
 
 const priorityOptions = [
   { label: 'P0', value: 'P0' },
@@ -262,7 +284,7 @@ const caseTypeOptions = [
 
 const filters = reactive({
   project_id: null,
-  module: null,
+  module_id: null,
   priority: null,
   status: null,
   source: null,
@@ -307,7 +329,7 @@ const selectedRowKeys = ref([])
 const formState = reactive({
   project_id: null,
   title: '',
-  module: '',
+  module_id: null,
   priority: 'P1',
   case_type: 'function',
   source: '',
@@ -316,9 +338,41 @@ const formState = reactive({
   expected_result: '',
   status: 'draft',
   tags: '',
-  module_code: '',
   case_code: ''
 })
+
+// 末级模块选项：label 用名称链（如 设备管理/通信日志），避免同名模块歧义
+const leafModuleOptions = computed(() => {
+  const options = []
+  const walk = (nodes, prefix) => {
+    nodes.forEach((node) => {
+      const path = prefix ? `${prefix}/${node.name}` : node.name
+      if (node.is_leaf === true) {
+        options.push({ label: path, value: node.id })
+      } else {
+        walk(node.children || [], path)
+      }
+    })
+  }
+  walk(moduleTree.value, '')
+  return options
+})
+
+// 模块编码只读展示：由所选模块带出相对路径，不提交给后端
+const currentModulePath = computed(() => {
+  const node = findModuleById(moduleTree.value, formState.module_id)
+  return (node && node.module_path) || editModuleCode.value || ''
+})
+
+function findModuleById(nodes, id) {
+  if (!id) return null
+  for (const node of nodes) {
+    if (node.id === id) return node
+    const found = findModuleById(node.children || [], id)
+    if (found) return found
+  }
+  return null
+}
 
 function priorityColor(p) {
   return { P0: 'red', P1: 'orange', P2: 'blue', P3: 'default' }[p] || 'default'
@@ -347,7 +401,11 @@ function onSelectChange(keys) {
 function buildQueryParams() {
   const params = { page: pagination.current, page_size: pagination.pageSize, order: order.value }
   if (filters.project_id) params.project_id = filters.project_id
-  if (filters.module) params.module = filters.module
+  // 按模块筛选时包含子模块下的用例（点非末级节点可看到整棵子树）
+  if (filters.module_id) {
+    params.module_id = filters.module_id
+    params.include_children = true
+  }
   if (filters.priority) params.priority = filters.priority
   if (filters.status) params.status = filters.status
   if (filters.source) params.source = filters.source
@@ -376,34 +434,62 @@ async function loadProjects() {
     // 有项目时默认选中第一个项目进行筛选；没有任何项目时才不选择
     if (!filters.project_id && projectOptions.value.length) {
       filters.project_id = projectOptions.value[0].value
-      filters.module = null
+      filters.module_id = null
     }
   } catch (e) {
     projectOptions.value = []
   }
-  loadModules()
+  loadModuleTree()
   loadData()
 }
 
-async function loadModules() {
+async function loadModuleTree(projectId) {
+  const pid = projectId || filters.project_id
+  if (!pid) {
+    moduleTree.value = []
+    return
+  }
   try {
-    const params = filters.project_id ? { project_id: filters.project_id } : {}
-    const res = await getTestcaseModules(params)
-    moduleOptions.value = (res.data || []).map(m => ({ label: m, value: m }))
+    const res = await getModuleTree(pid)
+    moduleTree.value = res.data || []
   } catch (e) {
-    moduleOptions.value = []
+    moduleTree.value = []
   }
 }
 
+// 模块结构或用例数变化后刷新左侧模块树
+function refreshModuleTree() {
+  treeVersion.value += 1
+  loadModuleTree()
+}
+
 function onProjectChange() {
-  // 切换/清空项目：重置模块并立即按当前筛选刷新
-  filters.module = null
+  // 切换/清空项目：清空模块筛选并回到第一页，左侧模块树随 projectId 变化自动重载
+  filters.module_id = null
   pagination.current = 1
-  loadModules()
+  loadModuleTree()
   loadData()
 }
 
-// 下拉框（模块/优先级/状态）选中即筛选；点 x 清空即移除该筛选，均立即刷新
+// 点击树节点：按模块筛选列表（含子模块）
+function onModuleSelect(moduleId) {
+  filters.module_id = moduleId || null
+  pagination.current = 1
+  loadData()
+}
+
+// 树节点的「+用例」快捷入口
+function onCreateCaseFromTree(moduleId) {
+  showForm(null, moduleId)
+}
+
+// 模块增删改成功后：同步表单模块选项并刷新列表
+function onModuleChanged() {
+  loadModuleTree()
+  loadData()
+}
+
+// 下拉框（优先级/状态）选中即筛选；点 x 清空即移除该筛选，均立即刷新
 function onFilterChange() {
   pagination.current = 1
   loadData()
@@ -424,9 +510,9 @@ function handleSearch() {
 }
 
 function handleReset() {
-  Object.assign(filters, { project_id: null, module: null, priority: null, status: null, source: null, keyword: '' })
+  Object.assign(filters, { project_id: null, module_id: null, priority: null, status: null, source: null, keyword: '' })
   pagination.current = 1
-  loadModules()
+  loadModuleTree()
   loadData()
 }
 
@@ -440,14 +526,15 @@ function handleTableChange(pag, _filters, sorter) {
   loadData()
 }
 
-function showForm(record) {
+function showForm(record, defaultModuleId) {
   isEdit.value = !!record
+  editModuleCode.value = record ? (record.module_code || '') : ''
   if (record) {
     editId.value = record.id
     Object.assign(formState, {
       project_id: record.project_id,
       title: record.title,
-      module: record.module,
+      module_id: record.module_id || null,
       priority: record.priority,
       case_type: record.case_type,
       source: record.source || '',
@@ -456,7 +543,6 @@ function showForm(record) {
       expected_result: record.expected_result,
       status: record.status,
       tags: record.tags || '',
-      module_code: record.module_code || '',
       case_code: record.case_code || ''
     })
   } else {
@@ -464,7 +550,8 @@ function showForm(record) {
     Object.assign(formState, {
       project_id: filters.project_id || null,
       title: '',
-      module: filters.module || '',
+      // 从树的「+用例」入口进入时默认选中该模块
+      module_id: defaultModuleId || null,
       priority: 'P1',
       case_type: 'function',
       source: '',
@@ -473,11 +560,17 @@ function showForm(record) {
       expected_result: '',
       status: 'draft',
       tags: '',
-      module_code: '',
       case_code: ''
     })
   }
+  loadModuleTree(formState.project_id)
   formVisible.value = true
+}
+
+// 弹窗内切换项目：原模块选择失效，清空并拉取新项目的模块树
+function onFormProjectChange() {
+  formState.module_id = null
+  loadModuleTree(formState.project_id)
 }
 
 async function showDetail(record) {
@@ -495,8 +588,22 @@ async function handleSubmit() {
     message.warning('请选择所属项目')
     return
   }
-  if (!formState.title || !formState.module || !formState.expected_result) {
-    message.warning('请填写标题、模块和预期结果')
+  if (!formState.title || !formState.expected_result) {
+    message.warning('请填写标题和预期结果')
+    return
+  }
+  if (!formState.module_id) {
+    message.warning('请选择末级模块')
+    return
+  }
+  const moduleNode = findModuleById(moduleTree.value, formState.module_id)
+  if (!moduleNode) {
+    message.warning('请选择末级模块')
+    return
+  }
+  // 末级模块会作为 pytest 文件使用，文件名必须 test_ 开头
+  if (!String(moduleNode.code || '').startsWith('test_')) {
+    message.warning('该模块将作为 pytest 文件使用，请先把目录名改为 test_ 开头')
     return
   }
   submitLoading.value = true
@@ -510,7 +617,7 @@ async function handleSubmit() {
     }
     formVisible.value = false
     loadData()
-    loadModules()
+    refreshModuleTree()
   } finally {
     submitLoading.value = false
   }
@@ -520,6 +627,7 @@ async function handleDelete(id) {
   await deleteTestcase(id)
   message.success('删除成功')
   loadData()
+  refreshModuleTree()
 }
 
 async function handleBatchDelete() {
@@ -527,6 +635,7 @@ async function handleBatchDelete() {
   message.success('批量删除成功')
   selectedRowKeys.value = []
   loadData()
+  refreshModuleTree()
 }
 
 function handleImport() {
@@ -585,7 +694,7 @@ async function handleImportSubmit() {
     importVisible.value = false
     selectedFile.value = null
     loadData()
-    loadModules()
+    refreshModuleTree()
   } catch (err) {
     // 错误已由拦截器提示
   } finally {
@@ -635,15 +744,18 @@ async function handleSync() {
   try {
     const res = await syncTestcases(filters.project_id)
     message.success(res.message || '已下发同步任务，请稍后刷新查看用例情况')
-    // 后台异步同步，稍后自动刷新一次列表
-    setTimeout(() => { loadData() }, 3000)
+    // 后台异步同步，稍后自动刷新列表与模块树
+    setTimeout(() => {
+      loadData()
+      refreshModuleTree()
+    }, 3000)
   } finally {
     setTimeout(() => { syncing.value = false }, 3000)
   }
 }
 
 onMounted(() => {
-  // 进入页面时默认选中第一个项目（若有）并按项目加载模块与列表
+  // 进入页面时默认选中第一个项目（若有）并按项目加载模块树与列表
   loadProjects()
 })
 </script>
@@ -652,8 +764,38 @@ onMounted(() => {
 .page-header {
   margin-bottom: 16px;
 }
+.testcase-body {
+  display: flex;
+  gap: 16px;
+}
+.module-panel {
+  flex: 0 0 260px;
+  width: 260px;
+  min-width: 0;
+  /* 兜底：超长模块名不允许把侧栏顶破，截断交给树节点内部处理 */
+  overflow: hidden;
+  padding: 8px;
+  border: 1px solid #f0f0f0;
+  border-radius: 4px;
+  background: #fff;
+  box-sizing: border-box;
+}
+/* a-table 在 flex 子项里需要 min-width: 0 才不会溢出 */
+.table-panel {
+  flex: 1;
+  min-width: 0;
+}
+.readonly-text {
+  color: rgba(0, 0, 0, 0.65);
+}
 .drawer-footer {
   margin-top: 16px;
   text-align: right;
+}
+/* 小屏幕下隐藏左侧模块树，保证表格可用 */
+@media (max-width: 991px) {
+  .module-panel {
+    display: none;
+  }
 }
 </style>

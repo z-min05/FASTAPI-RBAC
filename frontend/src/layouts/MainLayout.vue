@@ -142,7 +142,9 @@ import {
   FolderOutlined,
   RobotOutlined,
   MessageOutlined,
-  ApiOutlined
+  ApiOutlined,
+  CodeOutlined,
+  ToolOutlined
 } from '@ant-design/icons-vue'
 
 const router = useRouter()
@@ -171,7 +173,9 @@ const iconMap = {
   FolderOutlined,
   RobotOutlined,
   MessageOutlined,
-  ApiOutlined
+  ApiOutlined,
+  CodeOutlined,
+  ToolOutlined
 }
 
 const currentRoute = computed(() => route)

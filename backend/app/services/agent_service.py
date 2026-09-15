@@ -18,7 +18,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import runtime as agent_runtime
-from app.agent.config import get_agent_config
+from app.agent.config import agent_workspace_path, agent_workspace_rel, get_agent_config, resolve_agent_workspace
 from app.core.crypto_util import decrypt, encrypt
 from app.core.pagination import PaginationParams
 from app.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
@@ -50,9 +50,10 @@ def mask_api_key(api_key: Optional[str]) -> str:
 
 
 def agent_config_hash(agent: AgentDefinition, llm: AgentLlm) -> str:
-    """Agent 运行配置指纹：LLM 相关字段 + 提示词 + 工具。
+    """Agent 运行配置指纹：LLM 相关字段 + 提示词 + 工具 + 工作目录。
 
     api_key 不参与 hash，避免轮换密钥导致存量会话全部失效。
+    workspace 必须参与，否则改了工作目录实例不会重建、bash 仍绑定旧目录。
     """
     raw = "|".join(
         [
@@ -62,6 +63,7 @@ def agent_config_hash(agent: AgentDefinition, llm: AgentLlm) -> str:
             str(llm.base_url or ""),
             str(agent.system_prompt or ""),
             json.dumps(sorted(agent.tools or []), ensure_ascii=False),
+            str(agent.workspace or ""),
         ]
     )
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
@@ -79,6 +81,7 @@ def build_snapshot(agent: AgentDefinition, llm: AgentLlm) -> dict:
         "base_url": llm.base_url,
         "system_prompt": agent.system_prompt,
         "tools": agent.tools or [],
+        "workspace": agent.workspace,
         "hash": agent_config_hash(agent, llm),
         "agent_updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
     }
@@ -95,7 +98,7 @@ def _to_paginated(items: list, total: int, params: PaginationParams) -> dict:
 
 
 def _compose_spec(agent: AgentDefinition, llm: AgentLlm, current_hash: str) -> dict:
-    """组装运行时规格：LLM 配置 + 提示词 + 工具勾选。"""
+    """组装运行时规格：LLM 配置 + 提示词 + 工具勾选 + 工作目录。"""
     return {
         "agent_id": agent.id,
         "hash": current_hash,
@@ -110,6 +113,8 @@ def _compose_spec(agent: AgentDefinition, llm: AgentLlm, current_hash: str) -> d
         },
         "system_prompt": agent.system_prompt or "",
         "tools": agent.tools or [],
+        # bash 工具工作目录：库中是相对顶层目录的子路径，运行时解析为绝对路径
+        "workspace": str(resolve_agent_workspace(agent.workspace, agent.user_id, agent.id)),
     }
 
 
@@ -284,6 +289,7 @@ class AgentDefService:
             "llm_model": llm.model if llm else None,
             "system_prompt": agent.system_prompt,
             "tools": agent.tools or [],
+            "workspace": agent.workspace,
             "enabled": agent.enabled,
             "created_at": agent.created_at.isoformat() if agent.created_at else None,
             "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
@@ -373,6 +379,10 @@ class AgentDefService:
             enabled=True,
         )
         self.db.add(agent)
+        await self.db.flush()
+        # 工作目录由服务端分配：{顶层目录}/user_<用户ID>/agent_<AgentID>，并立即建好
+        agent.workspace = agent_workspace_rel(user_id, agent.id)
+        agent_workspace_path(user_id, agent.id)
         await self.db.flush()
         await self.db.refresh(agent)
         return self._to_dict(agent, llm)
@@ -571,6 +581,8 @@ class AgentService:
                 "role": m.role,
                 "content": m.content,
                 "token_total": m.token_total,
+                "status": m.status,
+                "error": m.error,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
             }
             for m in reversed(rows)  # 升序返回，便于聊天展示
@@ -671,10 +683,13 @@ class AgentService:
         conv_id: int,
         reply: str,
         records,
-        with_message: bool = True,
+        status: str = "ok",
+        error: str | None = None,
     ) -> None:
         """流式结束后用独立会话落库（assistant 消息 + token 记录）。
 
+        成功与失败都落 assistant 消息：失败轮保留已生成的部分文本 + 中断原因
+        （status=failed），否则用户刷新后只剩自己的提问，会误以为 AI 未执行而重复触发。
         请求会话在 SSE 流结束后可能已被回收，因此这里自建会话；
         会话若在流式期间被删除则跳过（避免孤儿记录）。
         """
@@ -691,16 +706,20 @@ class AgentService:
             if not conv:
                 logger.info("会话已删除，跳过流式结果落库 conv_id=%s", conv_id)
                 return
-            if with_message:
-                total_tokens = sum(r.total_tokens for r in records)
-                session.add(
-                    AgentMessage(
-                        conversation_id=conv.id,
-                        role="assistant",
-                        content=reply or "（AI 未能生成有效回复，请重试）",
-                        token_total=total_tokens or None,
-                    )
+            total_tokens = sum(r.total_tokens for r in records)
+            content = reply
+            if not content and status == "ok":
+                content = "（AI 未能生成有效回复，请重试）"
+            session.add(
+                AgentMessage(
+                    conversation_id=conv.id,
+                    role="assistant",
+                    content=content or None,
+                    token_total=total_tokens or None,
+                    status=status,
+                    error=error,
                 )
+            )
             session.add_all(_build_token_records(user_id, conv.id, records))
             # 触达 updated_at，让会话列表排序/刷新感知到本轮回复
             await session.execute(

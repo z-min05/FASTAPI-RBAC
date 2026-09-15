@@ -27,6 +27,7 @@ TEST_PERMISSIONS = [
     {"name": "创建项目", "code": "project:create", "module": "project", "action": "create"},
     {"name": "更新项目", "code": "project:update", "module": "project", "action": "update"},
     {"name": "删除项目", "code": "project:delete", "module": "project", "action": "delete"},
+    {"name": "项目代码初始化", "code": "project:init", "module": "project", "action": "init"},
     {"name": "用例列表", "code": "testcase:list", "module": "testcase", "action": "list"},
     {"name": "用例详情", "code": "testcase:detail", "module": "testcase", "action": "detail"},
     {"name": "创建用例", "code": "testcase:create", "module": "testcase", "action": "create"},
@@ -35,6 +36,9 @@ TEST_PERMISSIONS = [
     {"name": "用例导出", "code": "testcase:export", "module": "testcase", "action": "export"},
     {"name": "用例导入", "code": "testcase:import", "module": "testcase", "action": "import"},
     {"name": "同步用例", "code": "testcase:sync", "module": "testcase", "action": "sync"},
+    {"name": "新建用例模块", "code": "testcase:module:create", "module": "testcase", "action": "module:create"},
+    {"name": "编辑用例模块", "code": "testcase:module:update", "module": "testcase", "action": "module:update"},
+    {"name": "删除用例模块", "code": "testcase:module:delete", "module": "testcase", "action": "module:delete"},
     {"name": "测试计划列表", "code": "plan:list", "module": "plan", "action": "list"},
     {"name": "测试计划详情", "code": "plan:detail", "module": "plan", "action": "detail"},
     {"name": "创建测试计划", "code": "plan:create", "module": "plan", "action": "create"},
@@ -64,6 +68,7 @@ TEST_MENUS = [
                     {"name": "新增项目", "menu_type": "button", "permission": "project:create", "sort": 1},
                     {"name": "编辑项目", "menu_type": "button", "permission": "project:update", "sort": 2},
                     {"name": "删除项目", "menu_type": "button", "permission": "project:delete", "sort": 3},
+                    {"name": "代码初始化", "menu_type": "button", "permission": "project:init", "sort": 4},
                 ],
             },
             {
@@ -77,6 +82,9 @@ TEST_MENUS = [
                     {"name": "导入用例", "menu_type": "button", "permission": "testcase:import", "sort": 4},
                     {"name": "导出用例", "menu_type": "button", "permission": "testcase:export", "sort": 5},
                     {"name": "同步用例", "menu_type": "button", "permission": "testcase:sync", "sort": 6},
+                    {"name": "新建用例模块", "menu_type": "button", "permission": "testcase:module:create", "sort": 7},
+                    {"name": "编辑用例模块", "menu_type": "button", "permission": "testcase:module:update", "sort": 8},
+                    {"name": "删除用例模块", "menu_type": "button", "permission": "testcase:module:delete", "sort": 9},
                 ],
             },
             {
@@ -578,6 +586,137 @@ async def _ensure_api_key_module(db):
                 await db.execute(role_menus.insert().values(role_id=user_role.id, menu_id=m.id))
 
 
+# ==================== Python 环境管理模块定义 ====================
+PYTHON_ENV_PERMISSIONS = [
+    {"name": "Python 环境列表", "code": "python-env:list", "module": "python_env", "action": "list"},
+    {"name": "新增 Python 环境", "code": "python-env:create", "module": "python_env", "action": "create"},
+    {"name": "更新 Python 环境", "code": "python-env:update", "module": "python_env", "action": "update"},
+    {"name": "删除 Python 环境", "code": "python-env:delete", "module": "python_env", "action": "delete"},
+    {"name": "同步 Python 环境", "code": "python-env:sync", "module": "python_env", "action": "sync"},
+]
+
+PYTHON_ENV_MENU_CHILDREN = [
+    {"name": "新增环境", "menu_type": "button", "permission": "python-env:create", "sort": 1},
+    {"name": "编辑环境", "menu_type": "button", "permission": "python-env:update", "sort": 2},
+    {"name": "删除环境", "menu_type": "button", "permission": "python-env:delete", "sort": 3},
+    {"name": "同步环境", "menu_type": "button", "permission": "python-env:sync", "sort": 4},
+]
+
+
+async def _ensure_python_env_module(db):
+    """幂等创建 Python 环境管理模块的权限、菜单（含按钮）与角色授权"""
+    # 1. 权限
+    perm_objs = {}
+    for p in PYTHON_ENV_PERMISSIONS:
+        result = await db.execute(select(Permission).where(Permission.code == p["code"]))
+        perm = result.scalar_one_or_none()
+        if not perm:
+            perm = Permission(**p)
+            db.add(perm)
+            await db.flush()
+        perm_objs[p["code"]] = perm
+
+    # 2. 菜单：一级目录「环境管理」-> 二级菜单「Python 环境管理」-> 按钮
+    env_dir = (await db.execute(
+        select(Menu).where(Menu.path == "/env", Menu.menu_type == "directory")
+    )).scalars().first()
+    if not env_dir:
+        env_dir = Menu(
+            name="环境管理", path="/env", icon="ToolOutlined",
+            menu_type="directory", sort=2, visible=True,
+        )
+        db.add(env_dir)
+        await db.flush()
+
+    # 历史数据可能曾挂在系统管理目录下、或曾是一级菜单，这里统一迁移到「环境管理」目录下
+    env_menu = (await db.execute(
+        select(Menu).where(
+            Menu.menu_type == "menu",
+            Menu.path.in_(["/env/python-envs", "/python-envs", "/system/python-envs"]),
+        )
+    )).scalars().first()
+    if not env_menu:
+        env_menu = Menu(
+            name="Python 环境管理", path="/env/python-envs", component="env/PythonEnvManage",
+            icon="CodeOutlined", menu_type="menu", parent_id=env_dir.id,
+            sort=1, permission="python-env:list",
+        )
+        db.add(env_menu)
+        await db.flush()
+    else:
+        # 就地迁移（menu_id 不变，按钮与角色授权都不受影响）
+        env_menu.name = "Python 环境管理"
+        env_menu.path = "/env/python-envs"
+        env_menu.component = "env/PythonEnvManage"
+        env_menu.icon = "CodeOutlined"
+        env_menu.parent_id = env_dir.id
+        env_menu.sort = 1
+        await db.flush()
+
+    module_menus = [env_dir, env_menu]
+
+    # 按钮
+    for btn_def in PYTHON_ENV_MENU_CHILDREN:
+        result = await db.execute(
+            select(Menu).where(
+                Menu.name == btn_def["name"],
+                Menu.parent_id == env_menu.id,
+                Menu.menu_type == "button",
+            )
+        )
+        btn = result.scalar_one_or_none()
+        if not btn:
+            btn = Menu(
+                name=btn_def["name"], menu_type="button",
+                permission=btn_def["permission"], parent_id=env_menu.id, sort=btn_def["sort"],
+            )
+            db.add(btn)
+            await db.flush()
+        module_menus.append(btn)
+
+    # 3. 角色授权（admin 全量；user 仅列表权限与菜单可见）
+    admin_role = (await db.execute(select(Role).where(Role.code == "admin"))).scalar_one_or_none()
+    user_role = (await db.execute(select(Role).where(Role.code == "user"))).scalar_one_or_none()
+
+    for code, perm in perm_objs.items():
+        if admin_role:
+            r = await db.execute(
+                select(role_permissions).where(
+                    role_permissions.c.role_id == admin_role.id,
+                    role_permissions.c.permission_id == perm.id,
+                )
+            )
+            if not r.first():
+                await db.execute(
+                    role_permissions.insert().values(role_id=admin_role.id, permission_id=perm.id)
+                )
+        if user_role and code.endswith(":list"):
+            r = await db.execute(
+                select(role_permissions).where(
+                    role_permissions.c.role_id == user_role.id,
+                    role_permissions.c.permission_id == perm.id,
+                )
+            )
+            if not r.first():
+                await db.execute(
+                    role_permissions.insert().values(role_id=user_role.id, permission_id=perm.id)
+                )
+
+    for m in module_menus:
+        if admin_role:
+            r = await db.execute(
+                select(role_menus).where(role_menus.c.role_id == admin_role.id, role_menus.c.menu_id == m.id)
+            )
+            if not r.first():
+                await db.execute(role_menus.insert().values(role_id=admin_role.id, menu_id=m.id))
+        if user_role and m.menu_type != "button":
+            r = await db.execute(
+                select(role_menus).where(role_menus.c.role_id == user_role.id, role_menus.c.menu_id == m.id)
+            )
+            if not r.first():
+                await db.execute(role_menus.insert().values(role_id=user_role.id, menu_id=m.id))
+
+
 async def seed():
     # 1. 创建所有表
     async with engine.begin() as conn:
@@ -588,11 +727,12 @@ async def seed():
         result = await db.execute(select(User).limit(1))
         if result.scalar_one_or_none():
             # 已有数据：增量补充新增模块的权限/菜单/角色授权（幂等）
-            print("检测到已有数据，增量补充测试管理/AI 助手/API 密钥/企业微信机器人模块权限/菜单")
+            print("检测到已有数据，增量补充测试管理/AI 助手/API 密钥/企业微信机器人/Python 环境管理模块权限/菜单")
             await _ensure_test_module(db)
             await _ensure_agent_module(db)
             await _ensure_api_key_module(db)
             await _ensure_wecom_module(db)
+            await _ensure_python_env_module(db)
             await db.commit()
             await _sync_casbin(db)
             print("增量补充完成")
@@ -879,6 +1019,9 @@ async def seed():
 
         # 全新安装：企业微信群机器人模块（权限/菜单/按钮/角色授权）
         await _ensure_wecom_module(db)
+
+        # 全新安装：Python 环境管理模块（权限/菜单/按钮/角色授权）
+        await _ensure_python_env_module(db)
 
         await db.commit()
         print("种子数据初始化完成")

@@ -12,7 +12,7 @@
 |---|---|---|---|
 | 1 | LLM 固定写在 `.env`（`AGENT_LLM_*`），代码内单例 | 换模型/加供应商要改配置重启；Key 暴露在 env | LLM 配置入库，**仅超管**在页面创建/编辑/启停，普通用户只能查看与选择 |
 | 2 | Agent 提示词走 `AGENT_SYSTEM_PROMPT=default/coder` 模板映射 | preset 与"用户自建 Agent"冲突 | 用户创建 Agent 时**直接输入文字提示词**，不落任何模板映射 |
-| 3 | 全局单 Agent 实例，工具由 `AGENT_TOOLS_ENABLED` 固定 | 无法按 Agent 定制能力 | 创建 Agent 时**默认不勾选工具**，由用户按需勾选（calculator/search，注册表可扩展） |
+| 3 | 全局单 Agent 实例，工具由 `AGENT_TOOLS_ENABLED` 固定 | 无法按 Agent 定制能力 | 创建 Agent 时**默认不勾选工具**，由用户按需勾选（当前工具集仅 `bash`，注册表可扩展） |
 | 4 | 会话只有 `agent_key/model` 两个弱字段，无 Agent 概念 | 无法表达"我建了多个 Agent 并选用" | 会话关联 `agent_id`，新建会话时选择自己的 Agent |
 | 5 | 记忆 `AGENT_MEMORY_BACKEND=memory`（InMemorySaver） | 重启丢上下文 | 固定 **PostgreSQL Checkpointer**（langgraph-checkpoint-postgres），线程级串行安全 |
 | 6 | 修改提示词/工具后无版本概念 | 旧会话图结构可能不兼容 | 会话保存**配置快照+hash**，Agent 变更后旧会话只读历史、禁止续聊（提示新建会话） |
@@ -58,7 +58,8 @@
 | description | str/text 可空 | |
 | llm_id | FK agent_llms.id | 选用哪个平台 LLM |
 | system_prompt | text | **用户直接输入的文字提示词**；可为空串（空则 LangChain 内部默认行为） |
-| tools | JSON list[str] | 默认 `[]`；用户勾选如 `["calculator","search"]` |
+| tools | JSON list[str] | 默认 `[]`；用户勾选如 `["bash"]`（注册表可扩展） |
+| workspace | str(500) 可空 | **bash 工具的工作目录**，存**相对顶层目录的子路径**（`user_<用户ID>/agent_<AgentID>`）。由服务端创建 Agent 时自动分配并建目录，前端不暴露、用户不可指定；运行时解析为绝对路径并校验未越出顶层目录（越界回退默认子目录）。参与 config hash，改动后运行时实例重建 |
 | enabled | bool 默认 true | 停用后不可再建新会话 |
 
 ### 3.3 `agent_conversations`（改造）
@@ -68,10 +69,10 @@
 | agent_key | preset key | **删除** |
 | model | 冗余快照 | 保留（由 agent 的 LLM 回填展示用） |
 | agent_id | - | **新增** FK → agent_definitions.id（存量数据为 NULL → 只读历史、禁止续聊） |
-| config_snapshot | - | **新增** JSON：`{agent_id, agent_name, llm_id, provider, model, base_url, system_prompt, tools, hash, agent_updated_at}` |
+| config_snapshot | - | **新增** JSON：`{agent_id, agent_name, llm_id, provider, model, base_url, system_prompt, tools, workspace, hash, agent_updated_at}` |
 | hash | - | 单独冗余列便于查询比对（或仅存快照内，二选一，实施取一） |
 
-**hash 算法**：`md5(f"{llm_id}:{provider}:{model}:{base_url}:{system_prompt}:{sorted(tools)}")`（api_key 不参与，避免轮换 Key 导致会话失效）。
+**hash 算法**：`md5(f"{llm_id}:{provider}:{model}:{base_url}:{system_prompt}:{sorted(tools)}:{workspace}")`（api_key 不参与，避免轮换 Key 导致会话失效；workspace 参与，保证改工作目录后实例重建）。
 
 ### 3.4 记忆表（LangGraph PG Checkpointer 自带）
 
@@ -86,6 +87,8 @@
 
 - **删除**：`AGENT_LLM_PROVIDER/MODEL/BASE_URL/API_KEY/TEMPERATURE/MAX_TOKENS/TIMEOUT/SYSTEM_PROMPT/TOOLS_ENABLED/MEMORY_BACKEND/CHECKPOINT_DB_URI`。
 - **保留**：`AGENT_ENABLED`（总开关）、`AGENT_INVOKE_TIMEOUT`（默认 180）。
+- **新增**：`AGENT_WORKSPACE_ROOT`（bash 工具顶层工作目录/沙箱根，留空默认 `backend/agent_workspaces` 并自动创建；每个 Agent 的工作目录固定为 `{顶层目录}/user_<用户ID>/agent_<AgentID>`，创建 Agent 时服务端自动分配并建目录，用户无需指定）。
+- **新增**：`AGENT_LLM_MAX_RETRIES`（默认 3）、`AGENT_LLM_RETRY_INITIAL_DELAY`（默认 5s）、`AGENT_LLM_RETRY_MAX_DELAY`（默认 30s）——LLM 429/5xx 限流退避：把 openai SDK 默认的 `0.5s*2^n`（单次上限 8s，对按分钟计的 TPM/RPM 限流太短）替换为 `initial*2^n`（单次封顶 max_delay，附 ±25% 抖动），并在服务端给出 `Retry-After` 时优先遵循（超 120s 退回自身调度）。实现见 `app/agent/core/retry.py`，由 `LLMFactory.create()` 在实例级替换 `root_client`/`root_async_client` 的 `_calculate_retry_timeout`。
 - **新增依赖**：`langgraph-checkpoint-postgres`（写入 requirements）。
 
 ### 4.2 运行时（`app/agent/runtime.py` 重构）
@@ -157,8 +160,8 @@
 |---|---|
 | `src/api/agent.js` | 新增 `agentLlm` CRUD、`agentDef` CRUD；改造会话创建 `createAgentConversation({agent_id})`；删除 presets 调用；`getAgentTools` 保留 |
 | 新建 `src/pages/agent/LlmManage.vue` | 表格+表单：name/provider/model/base_url/**api_key(不回显，编辑留空=不改)**/temperature/max_tokens/timeout/enabled/remark；新增/编辑/删除按钮挂 `v-permission="'agent:llm:manage'"` |
-| 新建 `src/pages/agent/AgentManage.vue` | 卡片/表格：名称/描述/LLM 下拉(取 `/agent/llms`)/**system_prompt textarea（placeholder 示例，无模板）**/**tools 多选（默认不勾，options 取 `/agent/tools`）**/enabled；user 只见自己，超管可 `?all` 并显示归属人 |
-| 改 `src/pages/agent/Chat.vue` | "新建对话"下拉由 preset 改为**我的 Agent 列表**；会话头显示 agent 名+LLM 模型 tag；空提示引导去 Agent 管理创建 |
+| 新建 `src/pages/agent/AgentManage.vue` | 卡片/表格：名称/描述/LLM 下拉(取 `/agent/llms`)/**system_prompt textarea（placeholder 示例，无模板）**/**tools 多选（默认不勾，options 取 `/agent/tools`）**/enabled；**不含 workspace 输入**（工作目录由服务端按 `AGENT_WORKSPACE_ROOT` 自动分配，用户无需感知）；user 只见自己，超管可 `?all` 并显示归属人 |
+| 改 `src/pages/agent/Chat.vue` | "新建对话"下拉由 preset 改为**我的 Agent 列表**；会话头显示 agent 名+LLM 模型 tag；空提示引导去 Agent 管理创建；**失败轮渲染红色气泡 + 「重试」按钮**（读 `list_messages` 返回的 `status/error`，重试时复用该条失败回复之前最近一条 user 消息内容重发） |
 | `src/router/index.js` | 新增静态路由 `agent/llms`、`agent/agents` |
 | `src/layouts/MainLayout.vue` | iconMap 补注册 `ApiOutlined`、`ToolOutlined`（防图标丢失 bug） |
 
@@ -172,6 +175,8 @@
   3. **Agent**：userA 建（选 LLM）；userB 列表不可见/get 404；超管 `all` 可见；未选工具默认 `[]`
   4. **会话**：选 agent 建会话带快照；发送（mock）历史/自动命名/409 归档照旧
   5. **快照守卫**：改 agent 提示词/工具后旧会话发送 → 409"配置已变更"
+  6. **流式失败轮**（`mock runtime.stream_round` 抛 `AgentInvokeError`）：SSE 下发 `error` 事件；库中仍落一条 `status=failed` 的 assistant 消息（保留失败前已下发的部分文本 + 中断原因）；token 记录照常落库
+  7. **限流退避**（不调真实 LLM）：`LLMFactory.create(retry_initial_delay=5, retry_max_delay=30)` 后需满足退避为 5/10/20s±25%、单次 ≤30s、`Retry-After` 优先、超 120s 退回自身退避、`retry_initial_delay<=0` 时保持 SDK 默认
 - 迁移与种子：`alembic` 增量 + `python -m scripts.seed_data` 幂等验证。
 - 运行时冒烟：真实 PG Checkpointer 建表 + 多 Agent 构建缓存命中/淘汰日志。
 

@@ -69,6 +69,12 @@ const routes = [
         meta: { title: '企业微信机器人', icon: 'WechatOutlined' }
       },
       {
+        path: 'env/python-envs',
+        name: 'PythonEnvManage',
+        component: () => import('@/pages/PythonEnvManage.vue'),
+        meta: { title: 'Python 环境管理', icon: 'CodeOutlined' }
+      },
+      {
         path: 'test/projects',
         name: 'ProjectManage',
         component: () => import('@/pages/test/ProjectManage.vue'),

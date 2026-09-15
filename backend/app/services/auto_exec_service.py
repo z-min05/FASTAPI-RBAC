@@ -13,6 +13,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from app.config import settings
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,9 +88,14 @@ async def _run_pytest_async(
     test_file: str,
     test_func: str,
     cwd: str,
-    timeout: int = 120,
+    timeout: int | None = None,
 ) -> tuple[str, str, str]:
-    """异步执行 pytest 单个函数，返回 (result, summary, full_log)"""
+    """异步执行 pytest 单个函数，返回 (result, summary, full_log)
+
+    timeout 为空时取全局配置 EXEC_TIMEOUT_SECONDS（默认 120 秒）。
+    """
+    if timeout is None:
+        timeout = settings.EXEC_TIMEOUT_SECONDS
     started = datetime.now()
     cmd = [
         python_path,

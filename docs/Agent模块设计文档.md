@@ -19,7 +19,7 @@
 
 1. Agent 作为**子模块完全集成**：数据表、Schema、Service、API、迁移、权限种子、前端页面均按现有模块规范新增，运行时相关代码收敛为领域子包。
 2. **交互形态 = 本项目前端 Web 聊天页**；源项目 CLI 主循环、确认式交互均不引入。
-3. **只保留安全的通用工具**：`calculator`、`search`（只读、无外部副作用），**移除**命令执行（run_cmd）、MQTT/HTTP-IoT（mqtt_*、http_*）类工具 → 因此无需 pending_op 二次确认机制。
+3. **工具集 = 单个 `bash`**：**移除** `calculator`、`search`，也**不迁移**源项目的 cmd / MQTT / HTTP-IoT 类工具；改为提供受约束的 shell 命令执行工具 `bash`。约束由四层组成：① 工作目录由**配置项 `AGENT_WORKSPACE_ROOT` 定顶层沙箱目录**，每个 Agent 固定使用其中的 `user_<用户ID>/agent_<AgentID>` 子目录，创建 Agent 时由服务端自动创建，用户无需也不可指定；② 危险命令黑名单（删根/磁盘操作/关机重启/fork 炸弹等）直接拒绝；③ 超时上限 300 秒；④ 输出头尾截断。仍不引入 pending_op 二次确认机制。
 4. 复用 RBAC：agent:* 菜单/按钮/接口权限；用户数据与登录态复用。
 5. 会话/消息/Token 落库，可追溯；多用户/多会话隔离。
 6. 一期**同步 HTTP 响应**，为 SSE 流式预留扩展位。
@@ -31,9 +31,9 @@
 | `core/agent.py` AgentBuilder | 构建 Agent | 迁入 `app/agent/core/agent_builder.py` | 原样保留 |
 | `core/llm_factory.py` LLMFactory | 多供应商创建 | 迁入 `app/agent/core/llm_factory.py` | 原样保留 |
 | `tools/registry.py` ToolRegistry | 工具注册/发现 | 迁入 `app/agent/tools/registry.py` | 原样保留 |
-| `tools/builtin/calculator_tool.py` | 安全计算 | 迁入 | 默认启用 |
-| `tools/builtin/search_tool.py` | 搜索（模拟实现） | 迁入 | 默认启用（后续可接真实搜索 API） |
-| `tools/builtin/cmd_tool.py` | Windows 命令执行 | **不迁移** | 风险过高，按需求移除 |
+| `tools/builtin/calculator_tool.py` | 安全计算 | **移除** | 可由 bash / LLM 直接完成，不再单独提供 |
+| `tools/builtin/search_tool.py` | 搜索（模拟实现） | **移除** | 源项目为模拟实现，无实际能力 |
+| `tools/builtin/cmd_tool.py` | Windows 命令执行 | 改造为 `bash` | 参考实现，加 workspace 绑定 + 危险命令黑名单 + 超时 + 输出截断 |
 | `tools/builtin/iot_*.py` + `iot_clients.py` | MQTT 控制/配置/指令 + HTTP 数据平台 | **不迁移** | 依赖内网环境且属写操作，按需求移除 |
 | `middleware/agent_middleware.py` | 日志+Token+消息清洗 | 迁入改造 | 去 rich 控制台，改 logger + 落库 |
 | `memory/checkpointer.py` | InMemorySaver / PostgresSaver | 迁入 | 一期 memory + DB 消息表；生产可切 postgres |
@@ -41,7 +41,7 @@
 | `token/*` | Token 账本/统计 | 迁入为进程内缓冲 | 落库 `agent_token_records` |
 | `app.py`（REPL 主循环） | CLI 交互/确认流 | **不迁移** | 交互由本项目前端 Chat 页承担；服务层只做同步 invoke |
 
-> 说明：移除 run_cmd / mqtt / http 后，工具均为**只读、无副作用**的通用工具，不存在需要用户二次确认的写操作，因此源项目的 PENDING_OP 确认机制一并移除。
+> 说明：工具集收敛为单个 `bash`。它具备写能力，故不采用源项目的 PENDING_OP 交互式确认（本项目交互形态为 Web 聊天页），改用「Agent 级 workspace + 危险命令黑名单 + 超时 + 输出截断」四层护栏。
 
 ## 3. 总体架构
 
@@ -57,10 +57,9 @@ backend/app/
 │   │   ├── agent_builder.py      # ← 迁自 core/agent.py
 │   │   └── llm_factory.py        # ← 迁自 core/llm_factory.py
 │   ├── tools/
-│   │   ├── registry.py           # ← 迁自 tools/registry.py（注册 calculator/search）
+│   │   ├── registry.py           # ← 迁自 tools/registry.py（自动发现 builtin 下的工具）
 │   │   └── builtin/
-│   │       ├── calculator_tool.py  # ← 迁移
-│   │       └── search_tool.py      # ← 迁移
+│   │       └── bash_tool.py        # shell 命令执行（workspace 绑定 + 黑名单 + 超时 + 截断）
 │   ├── memory/checkpointer.py    # ← 迁移
 │   ├── middleware/agent_middleware.py  # ← 迁移改造（logger 代替 rich）
 │   ├── prompts/templates.py      # ← 迁移，补充平台通用提示词
@@ -87,7 +86,7 @@ agent_service.send_message(conversation_id, content)
    ├─ 1. 校验会话归属（conversation.user_id == 当前用户）
    ├─ 2. 持久化 user 消息 → agent_messages
    ├─ 3. asyncio.wait_for(asyncio.to_thread(agent.invoke, input, config), timeout)
-   │      └─ Agent(单例, thread_id 隔离) 内部：LLM ⇄ tools(calculator/search)
+   │      └─ Agent(单例, thread_id 隔离) 内部：LLM ⇄ tools(bash)
    │      └─ middleware 采集 token → TokenLedger(内存)
    ├─ 4. 持久化 assistant 消息（clean 文本 + token 数）
    ├─ 5. token 落库 agent_token_records
@@ -118,7 +117,11 @@ agent_service.send_message(conversation_id, content)
 | `AGENT_LLM_TIMEOUT` | `60` | 模型请求超时（秒） |
 | `AGENT_INVOKE_TIMEOUT` | `180` | 单轮 Agent 总超时（秒） |
 | `AGENT_SYSTEM_PROMPT` | `default` | 默认系统提示词模板名 |
-| `AGENT_TOOLS_ENABLED` | `calculator,search` | 启用工具白名单（逗号分隔） |
+| `AGENT_TOOLS_ENABLED` | `bash` | 注册表可用工具（当前仅 bash；实际启用由 Agent 自身勾选决定） |
+| `AGENT_WORKSPACE_ROOT` | `""` | bash 工具的**顶层工作目录（沙箱根）**；留空则取 `backend/agent_workspaces`。每个 Agent 的工作目录固定为 `{该目录}/user_<用户ID>/agent_<AgentID>`，创建 Agent 时自动创建，用户无需指定 |
+| `AGENT_LLM_MAX_RETRIES` | `3` | LLM 请求重试次数（429/5xx/连接错误） |
+| `AGENT_LLM_RETRY_INITIAL_DELAY` | `5` | 重试等待初始值（秒），按 `initial*2^n` 递增；`<=0` 时沿用 openai SDK 默认退避 |
+| `AGENT_LLM_RETRY_MAX_DELAY` | `30` | 单次重试等待上限（秒），防止指数退避无限增长 |
 | `AGENT_MEMORY_BACKEND` | `memory` | `memory` / `postgres`（checkpointer） |
 | `AGENT_CHECKPOINT_DB_URI` | `""` | postgres 时必填（独立 sync 连接串） |
 
@@ -129,7 +132,7 @@ agent_service.send_message(conversation_id, content)
 ```
 AgentBuilder()
   .with_llm(LLMFactory.create(...))
-  .with_tools(白名单工具列表)          # registry 按 AGENT_TOOLS_ENABLED 过滤
+  .with_tools(工具列表)               # registry 自动发现，Agent 勾选后按 name 过滤
   .with_system_prompt(get_system_prompt(key))   # 支持按会话 preset 覆盖
   .with_middleware(create_agent_middleware(ledger))
   .with_checkpointer(...)             # 见 4.5
@@ -138,17 +141,27 @@ AgentBuilder()
 
 - **循环上限**：提示词约束 + 配置 `max_iterations=10`，避免工具空转烧 token。
 - **超时保护**：路由/服务侧 `asyncio.wait_for(asyncio.to_thread(...), timeout=AGENT_INVOKE_TIMEOUT)`，超时返回友好错误。
+- **限流退避**：openai SDK 默认退避为 `0.5s*2^n` 且单次上限 8s，遇到按分钟计的 TPM/RPM 限流（HTTP 429，如 `inference exceeds tpm/rpm limit`）时窗口过短，重试往往在同一分钟内再次被拒导致整轮失败。故在**实例级**替换 `root_client` / `root_async_client` 的 `_calculate_retry_timeout`（见 `app/agent/core/retry.py`），改为 `AGENT_LLM_RETRY_INITIAL_DELAY * 2^n`（单次封顶 `AGENT_LLM_RETRY_MAX_DELAY`，附 ±25% 抖动），服务端返回 `Retry-After` 时优先遵循（超 120s 视为不可等待，退回自身调度）。只改「等多久」，「重试几次」仍由 `AGENT_LLM_MAX_RETRIES` 控制；超过次数后按轮失败处理并按上面规则落库。SDK 只在请求建立阶段（429/5xx/连接错误）重试，不会重放已开始输出的流，因此不会产生重复文本。
 
-### 4.3 工具集（移除 cmd / mqtt / http 后）
+### 4.3 工具集（仅 `bash`）
 
 | 工具 | 类型 | 行为 | 说明 |
 |---|---|---|---|
-| `calculator` | 安全（只读） | 数值表达式求值（安全环境执行） | 默认启用 |
-| `search` | 安全（只读） | 关键词搜索（源项目为模拟实现） | 默认启用，后续可接真实搜索 API |
+| `bash` | 写（有副作用） | 在指定工作目录下执行 shell 命令，返回退出码 + stdout/stderr | 工作目录由服务端按「顶层目录 + Agent 专属子目录」自动分配 |
+
+`bash` 四项约束（实现见 `app/agent/tools/builtin/bash_tool.py`）：
+
+1. **工作目录（顶层目录 + 自动子目录）**：配置项 `AGENT_WORKSPACE_ROOT` 指定顶层沙箱目录（留空默认 `backend/agent_workspaces`，不存在时自动创建）。每个 Agent 的工作目录固定为 `{顶层目录}/user_<用户ID>/agent_<AgentID>`，**创建 Agent 时由服务端自动创建并写入 `agent_definitions.workspace`（存相对子路径）**，前端不暴露、用户无需感知。
+   - 运行时把相对子路径解析为绝对路径；解析结果必须落在顶层目录内，否则视为越界并回退默认子目录（防手工改库用 `../..`、绝对路径逃逸沙箱）。
+   - 该字段参与 `agent_config_hash`，修改后运行时实例会重建并重新绑定。
+   - 注册表中只保留「未绑定」的默认实例（供工具列表展示与工具名白名单校验），真实执行时由 `runtime._bind_tools` 换成绑定副本。
+2. **危险命令黑名单**：删根/家目录、磁盘与分区操作、向块设备写入、关机重启、fork 炸弹、改根目录权限属主、格式化盘符等，命中即拒绝并回报原因（不交给 shell）。黑名单是**护栏而非安全沙箱**，执行不可信命令须把服务部署在容器 / 低权限用户下。
+3. **超时**：默认 60 秒，上限 300 秒；超时终止进程（POSIX 下按进程组杀，避免子进程残留）。
+4. **输出截断**：输出先重定向到临时文件，只读回头部约 6KB + 尾部约 2KB，中间标注省略字节数，避免 `yes` 这类命令把服务内存打爆。
 
 设计要点：
-- 工具全部**无外部副作用**，无二次确认需求；`registry` 保留工具发现/注册机制，便于后续扩展新工具。
-- 若未来新增写/危险工具，须先走权限评审并增加确认机制（本期不做）。
+- `registry` 保留工具发现/注册机制，便于后续扩展新工具。
+- 若未来新增更高危能力的工具，须先走权限评审并增加确认机制（本期不做）。
 - 工具异常信息脱敏后返回 LLM（不回显密钥/服务器路径细节）；logger 统一记录。
 
 ### 4.4 异步执行策略
@@ -191,8 +204,12 @@ AgentBuilder()
 |---|---|---|---|
 | conversation_id | Integer | NOT NULL, FK→agent_conversations.id(ondelete CASCADE), index | 会话 |
 | role | String(20) | NOT NULL | user / assistant |
-| content | Text | NULL | 文本内容 |
+| content | Text | NULL | 文本内容（失败轮保存中断前已下发给用户的部分文本） |
 | token_total | Integer | NULL | 本条 assistant 消息生成 token（冗余展示） |
+| status | String(20) | NOT NULL, default 'ok' | 本轮结果：`ok` / `failed` |
+| error | Text | NULL | 失败原因（面向用户的提示，仅 `status=failed` 时有值） |
+
+> **失败轮同样落库**：推理失败/超时时也会写入一条 `status=failed` 的 assistant 消息，保留失败前已产生的文本与中断原因。否则用户刷新后只剩下自己的提问，会误以为 AI 什么都没做而重复触发；而 `bash` 等有副作用的工具可能已真实执行，LangGraph checkpointer 的记忆也已推进（模型看得见、用户看不见）。前端据此渲染红色失败气泡并提供「重试」按钮。
 
 **表 `agent_token_records`（Token 记录）**
 
@@ -215,8 +232,9 @@ AgentBuilder()
 |---|---|---|---|
 | POST | `/agent/conversations` | agent:chat | 创建会话（body: title/agent_key 可选）→ `{id, thread_id}` |
 | GET | `/agent/conversations` | agent:chat | 我的会话列表（分页） |
-| GET | `/agent/conversations/{id}/messages` | agent:chat | 会话历史消息（分页） |
+| GET | `/agent/conversations/{id}/messages` | agent:chat | 会话历史消息（分页）；每条含 `status`（`ok`/`failed`）与 `error`，失败轮前端据此渲染失败气泡 + 重试 |
 | POST | `/agent/conversations/{id}/messages` | agent:chat | **发送消息** `{content}` → `{reply, token}`；invoke 超时/失败给友好错误 |
+| POST | `/agent/conversations/{id}/messages/stream` | agent:chat | **发送消息（SSE 流式）**：`text` / `tool` / `tool_result` / `todo` / `done`（含 reply+tokens）/ `error`（含提示）；前置校验失败返回普通 JSON 错误 |
 | DELETE | `/agent/conversations/{id}` | agent:delete | 删除会话（级联消息；Token 记录保留审计） |
 | GET | `/agent/tools` | agent:chat | 当前可用工具列表（前端能力展示） |
 | GET | `/agent/presets` | agent:chat | 可选 preset（提示词/模型组合） |
@@ -247,7 +265,7 @@ AgentBuilder()
   - 输入区：发送框、发送中 loading + 禁用、Enter 发送
   - 底部/侧栏：本次与累计 Token 消耗
   - 会话标题取首条消息前 20 字（前端可编辑，v2）
-- 无确认类交互（工具均为只读）。
+- 无确认类交互（工具非只读，靠 workspace + 黑名单 + 超时 + 输出截断兜底）。
 - Markdown 渲染引入轻量依赖（如 `marked`）。
 
 ## 8. 实施任务拆解
@@ -255,7 +273,7 @@ AgentBuilder()
 | 阶段 | 任务 | 涉及文件（目标） |
 |---|---|---|
 | 1. 依赖与配置 | 新增 langchain/langgraph 等依赖；Settings 扩展 AGENT_* | `backend/requirements.txt`、`app/config.py`、`.env` |
-| 2. 运行时层迁移 | 迁入 core / tools(calculator,search) / memory / middleware / prompts / token；rich→logger 改造 | `app/agent/**` |
+| 2. 运行时层迁移 | 迁入 core / tools(bash) / memory / middleware / prompts / token；rich→logger 改造 | `app/agent/**` |
 | 3. runtime 单例 | 懒加载 Agent + checkpointer + invoke 线程池/超时封装 | `app/agent/runtime.py` |
 | 4. 数据层 | 3 张表 Model + 0004 迁移 + Schema | `app/models/agent_*.py`、`alembic/versions/0004_*.py`、`app/schemas/agent.py` |
 | 5. 服务层 | agent_service：会话 CRUD、send_message、历史、统计 | `app/services/agent_service.py` |
@@ -271,9 +289,8 @@ AgentBuilder()
 3. **密钥安全**：`AGENT_LLM_API_KEY` 只进 `.env`，不进库不打印（日志脱敏）。
 4. **多 Worker / 重启**：memory checkpointer 重启丢会话状态，历史仍可在 `agent_messages` 展示；生产推荐 postgres checkpointer。
 5. **Token 成本**：默认轻量模型 + `max_tokens=2048` + `max_iterations=10`；未启用模块时通过 `AGENT_ENABLED` 直接关闭，避免无谓依赖加载。
-6. **模拟搜索**：`search` 为源项目模拟实现，上线前应替换为真实搜索/知识检索，避免误导用户（列入后续演进）。
-7. **新增工具纪律**：本期工具均为只读；未来新增写/危险工具必须先评审并设计确认机制。
-8. **语言与定位**：默认提示词中立通用，可面向平台用户扩展（如测试用例知识问答，见第 10 节）。
+6. **命令执行风险**：`bash` 具备写能力，黑名单只拦明显误操作，**不是安全沙箱**；生产部署应限制服务运行账号权限（容器 / 低权限用户），并只给可信用户开放 `agent:*` 权限。
+7. **语言与定位**：默认提示词中立通用，可面向平台用户扩展（如测试用例知识问答，见第 10 节）。
 
 ## 10. 后续演进（本期不做）
 

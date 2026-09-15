@@ -278,7 +278,7 @@ async def test_agent_tool_whitelist(client: AsyncClient, superuser_headers: dict
     """Agent 只能勾选注册表内工具，非法工具 400"""
     from app.agent import runtime as agent_runtime
 
-    monkeypatch.setattr(agent_runtime, "list_tool_names", lambda: ["calculator"])
+    monkeypatch.setattr(agent_runtime, "list_tool_names", lambda: ["bash"])
     llm = await _create_llm(client, superuser_headers)
 
     resp = await client.post(AGENT_URL, headers=superuser_headers, json={
@@ -287,10 +287,10 @@ async def test_agent_tool_whitelist(client: AsyncClient, superuser_headers: dict
     assert resp.status_code == 400
 
     resp = await client.post(AGENT_URL, headers=superuser_headers, json={
-        "name": "合法工具Agent", "llm_id": llm["id"], "tools": ["calculator"],
+        "name": "合法工具Agent", "llm_id": llm["id"], "tools": ["bash"],
     })
     assert resp.status_code == 200
-    assert resp.json()["data"]["tools"] == ["calculator"]
+    assert resp.json()["data"]["tools"] == ["bash"]
 
 
 @pytest.mark.asyncio
@@ -602,13 +602,13 @@ async def test_tools_endpoint(client: AsyncClient, superuser_headers: dict, agen
 
     monkeypatch.setattr(
         agent_runtime, "available_tools",
-        lambda: [{"name": "calculator", "description": "数学计算"}],
+        lambda: [{"name": "bash", "description": "shell 命令执行"}],
     )
     resp = await client.get(TOOLS_URL, headers=superuser_headers)
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["tools"][0]["name"] == "calculator"
-    assert body["tools"][0]["description"] == "数学计算"
+    assert body["tools"][0]["name"] == "bash"
+    assert body["tools"][0]["description"] == "shell 命令执行"
 
 
 @pytest.mark.asyncio

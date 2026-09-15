@@ -86,6 +86,7 @@ class AgentDefResponse(BaseModel):
     llm_model: Optional[str] = None
     system_prompt: str
     tools: list[str]
+    workspace: Optional[str] = Field(None, description="相对 bash 顶层工作目录的子路径，由服务端自动分配")
     enabled: bool
     created_at: datetime
     updated_at: datetime

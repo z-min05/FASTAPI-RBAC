@@ -11,8 +11,8 @@ ALLOWED_CASE_TYPES = [
 
 class TestCaseBase(BaseModel):
     project_id: int = Field(..., description="所属项目")
+    module_id: int = Field(..., description="所属末级模块（只能选末级）")
     title: str = Field(..., min_length=1, max_length=200)
-    module: str = Field(..., min_length=1, max_length=50)
     priority: str = Field("P1", pattern="^P[0-3]$")
     case_type: str = Field("function")
     source: str | None = Field(None, max_length=50)
@@ -21,18 +21,17 @@ class TestCaseBase(BaseModel):
     expected_result: str = Field(..., min_length=1)
     status: str = Field("draft")
     tags: str | None = Field(None, max_length=200)
-    module_code: str | None = Field(None, max_length=100, description="模块编码（pytest 文件名，不含 .py，需以 test_ 开头）")
     case_code: str | None = Field(None, max_length=100, description="用例编码（pytest 函数名，需以 test_ 开头）")
 
 
 class TestCaseCreate(TestCaseBase):
-    pass
+    """新增用例：module / module_code 由后端按 module_id 从模块树推导，不接受前端传入"""
 
 
 class TestCaseUpdate(BaseModel):
     project_id: int | None = None
+    module_id: int | None = None
     title: str | None = Field(None, min_length=1, max_length=200)
-    module: str | None = Field(None, min_length=1, max_length=50)
     priority: str | None = Field(None, pattern="^P[0-3]$")
     case_type: str | None = None
     source: str | None = None
@@ -41,18 +40,23 @@ class TestCaseUpdate(BaseModel):
     expected_result: str | None = Field(None, min_length=1)
     status: str | None = None
     tags: str | None = None
-    module_code: str | None = None
     case_code: str | None = None
 
 
 class TestCaseResponse(BaseModel):
-    """用例响应：附带回显的项目编码/名称"""
+    """用例响应：附带回显的项目编码/名称
+
+    module 为末级模块名称、module_code 为模块相对路径（不含 .py），二者均由模块树推导。
+    """
+
     id: int
     project_id: int
     project_code: str | None = None
     project_name: str | None = None
-    title: str
+    module_id: int | None = None
     module: str
+    module_code: str | None = None
+    title: str
     priority: str
     case_type: str
     source: str | None = None
@@ -61,7 +65,6 @@ class TestCaseResponse(BaseModel):
     expected_result: str
     status: str
     tags: str | None = None
-    module_code: str | None = None
     case_code: str | None = None
     created_at: datetime
     updated_at: datetime

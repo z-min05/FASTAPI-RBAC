@@ -20,6 +20,11 @@ class TestCase(BaseModel):
     expected_result: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
     tags: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # 归属的末级模块（权威来源）
+    module_id: Mapped[int | None] = mapped_column(
+        ForeignKey("testcase_modules.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    # 模块相对路径（相对 auto_root_path，不含 .py），如 device/test_comm_log；由模块树推导
     module_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     case_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
 

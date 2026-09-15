@@ -32,6 +32,7 @@ from app.agent.middleware.agent_middleware import create_agent_middleware
 from app.agent.prompts.templates import resolve_system_prompt
 from app.agent.token.ledger import TokenLedger
 from app.agent.token.models import TokenRecord
+from app.agent.tools.builtin.bash_tool import BASH_TOOL_NAME, build_bash_tool
 from app.agent.tools.registry import ToolRegistry
 from app.utils.logger import logger
 
@@ -49,12 +50,19 @@ _round_lock = asyncio.Lock()
 
 
 class AgentInvokeError(RuntimeError):
-    """一轮 Agent 推理失败（含超时）。携带已产生的 token 记录供审计落库。"""
+    """一轮 Agent 推理失败（含超时）。携带已产生的 token 记录与部分回复供审计落库。"""
 
-    def __init__(self, message: str, records: list | None = None, timed_out: bool = False):
+    def __init__(
+        self,
+        message: str,
+        records: list | None = None,
+        timed_out: bool = False,
+        reply: str = "",
+    ):
         super().__init__(message)
         self.records = records or []
         self.timed_out = timed_out
+        self.reply = reply or ""
 
 
 class _Instance:
@@ -81,10 +89,23 @@ def available_tools() -> list[dict]:
     ]
 
 
+def _bind_tools(tools: list, workspace: str | None) -> list:
+    """把需要按 Agent 配置定制的工具换成绑定后的实例。
+
+    注册表里只有未绑定 workspace 的 bash 默认实例（供列表展示与白名单校验），
+    实际执行必须换成绑定该 Agent workspace 的副本。
+    """
+    return [
+        build_bash_tool(workspace) if getattr(t, "name", None) == BASH_TOOL_NAME else t
+        for t in tools
+    ]
+
+
 def _build_instance(spec: dict) -> _Instance:
-    """按 spec（LLM 配置 + 提示词 + 工具勾选）构建一个 LangGraph Agent 实例。"""
+    """按 spec（LLM 配置 + 提示词 + 工具勾选 + 工作目录）构建一个 LangGraph Agent 实例。"""
     llm_cfg = spec.get("llm") or {}
     tools = _registry.get_enabled(list(spec.get("tools") or []))
+    tools = _bind_tools(tools, spec.get("workspace"))
     middleware = create_agent_middleware(ledger)
 
     # TodoListMiddleware：为复杂多步骤任务注入 write_todos 待办管理能力
@@ -96,6 +117,7 @@ def _build_instance(spec: dict) -> _Instance:
         except Exception:  # pragma: no cover
             logger.warning("TodoListMiddleware 初始化失败，已跳过", exc_info=True)
 
+    retry_cfg = get_agent_config()
     llm = LLMFactory.create(
         llm_cfg.get("provider") or "openai",
         model=llm_cfg.get("model"),
@@ -104,6 +126,10 @@ def _build_instance(spec: dict) -> _Instance:
         temperature=llm_cfg.get("temperature", 0.3),
         max_tokens=llm_cfg.get("max_tokens", 2048),
         timeout=llm_cfg.get("timeout", 60),
+        # 限流（429）退避：默认 0.5s*2^n 对按分钟计的 TPM/RPM 限额太短
+        max_retries=retry_cfg.llm_max_retries,
+        retry_initial_delay=retry_cfg.llm_retry_initial_delay,
+        retry_max_delay=retry_cfg.llm_retry_max_delay,
     )
 
     builder = (
@@ -119,7 +145,12 @@ def _build_instance(spec: dict) -> _Instance:
 
     graph = builder.build()
     agent_id = int(spec.get("agent_id") or 0)
-    logger.info("Agent 实例构建完成: agent_id=%s tools=%s", agent_id, [t.name for t in tools])
+    logger.info(
+        "Agent 实例构建完成: agent_id=%s workspace=%s tools=%s",
+        agent_id,
+        spec.get("workspace") or "(未配置)",
+        [t.name for t in tools],
+    )
     return _Instance(agent_id, spec.get("hash") or "", graph, middleware)
 
 
@@ -517,7 +548,8 @@ async def stream_round(spec: dict, input_data: dict, config: dict) -> Any:
       {"type": "tool_result", "index": int, "output": str, "call_id": str}
       {"type": "final", "reply": str, "records": [TokenRecord...]}  收尾（含结算记录）
 
-    失败（含超时）抛出 AgentInvokeError（records 为已采集的 Token 记录）。
+    失败（含超时）抛出 AgentInvokeError（records 为已采集的 Token 记录，
+    reply 为已下发前端的部分文本，供失败轮落库）。
     与 run_round 共用 _round_lock，保证 PG 连接与账本单飞。
     """
     # 同 run_round：构建为同步阻塞操作，放线程池并限时执行
@@ -552,27 +584,43 @@ async def stream_round(spec: dict, input_data: dict, config: dict) -> Any:
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
 
+        # 已下发前端的文本累积：失败/超时时用它落库，保证「用户看到什么，库里就有什么」
+        reply_parts: list[str] = []
         try:
             deadline = time.monotonic() + timeout
             while True:
                 remain = deadline - time.monotonic()
                 if remain <= 0:
-                    raise AgentInvokeError("Agent 推理超时", records=ledger.drain(), timed_out=True)
+                    raise AgentInvokeError(
+                        "Agent 推理超时",
+                        records=ledger.drain(),
+                        timed_out=True,
+                        reply="".join(reply_parts),
+                    )
                 try:
                     ev = await asyncio.wait_for(queue.get(), timeout=min(remain, 5.0))
                 except asyncio.TimeoutError:
                     continue
                 if ev is None:
                     break
+                if ev.get("type") == "text":
+                    reply_parts.append(ev.get("content") or "")
                 yield ev
         finally:
             stop.set()
-            ledger.reset()
 
-        # Token 结算：流式下中间件聚合拿不到 usage 时回退 chunk usage 推导
+        # Token 结算：中间件账本优先，拿不到时回退 chunk usage 推导。
+        # 顺序必须是「先 drain 再 reset」——反过来的话账本被清空，
+        # 落库的 token 记录会整轮缺失。
         ledger_recs = ledger.drain()
         ledger.reset()
         records = ledger_recs or summary.get("derived") or []
+        partial = "".join(reply_parts)
         if not summary.get("ok", True):
-            raise AgentInvokeError(summary.get("error") or "Agent 推理失败", records=records)
-        yield {"type": "final", "reply": summary.get("reply") or "", "records": records}
+            # 失败时以「已下发前端的文本」为准，保证库内记录与用户所见一致
+            raise AgentInvokeError(
+                summary.get("error") or "Agent 推理失败",
+                records=records,
+                reply=partial or summary.get("reply") or "",
+            )
+        yield {"type": "final", "reply": summary.get("reply") or partial, "records": records}

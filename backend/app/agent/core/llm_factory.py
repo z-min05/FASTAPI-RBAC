@@ -7,6 +7,8 @@ from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 
+from app.agent.core.retry import apply_backoff
+
 logger = logging.getLogger("agent.llm_factory")
 
 _LLM_REGISTRY: dict[str, type[BaseChatModel]] = {}
@@ -80,6 +82,8 @@ class LLMFactory:
         *,
         model: str = "gpt-4o",
         max_retries: int = 2,
+        retry_initial_delay: float = 0.0,
+        retry_max_delay: float = 0.0,
         timeout: float | None = None,
         base_url: str = "",
         api_key: str = "",
@@ -121,10 +125,22 @@ class LLMFactory:
             kwargs["api_key"] = api_key
 
         logger.info(
-            "创建 LLM: provider=%s, model=%s, max_retries=%d, timeout=%s",
+            "创建 LLM: provider=%s, model=%s, max_retries=%d, timeout=%s, retry_backoff=%s",
             provider, model, max_retries, timeout,
+            f"{retry_initial_delay}s*2^n(max {retry_max_delay}s)" if retry_initial_delay > 0 else "默认",
         )
-        return cls(model=model, **kwargs)  # type: ignore[call-arg]
+        llm = cls(model=model, **kwargs)  # type: ignore[call-arg]
+
+        # 限流退避：openai SDK 默认 0.5s*2^n（单次上限 8s）对按分钟计的 TPM/RPM 限流太短，
+        # 按配置替换为更长的等待窗口（retry_initial_delay<=0 时保持默认）
+        if retry_initial_delay > 0:
+            for attr in ("root_client", "root_async_client"):
+                apply_backoff(
+                    getattr(llm, attr, None),
+                    initial=retry_initial_delay,
+                    max_delay=retry_max_delay,
+                )
+        return llm
 
     @staticmethod
     def from_string(model_string: str, **kwargs: Any) -> BaseChatModel:

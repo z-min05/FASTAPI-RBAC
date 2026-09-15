@@ -1,6 +1,5 @@
-"""内置工具：calculator（安全计算）、search（搜索，模拟实现）。"""
+"""内置工具：bash（shell 命令执行，绑定 Agent 自身的 workspace）。"""
 
-from app.agent.tools.builtin.calculator_tool import calculator
-from app.agent.tools.builtin.search_tool import search
+from app.agent.tools.builtin.bash_tool import bash
 
-__all__ = ["calculator", "search"]
+__all__ = ["bash"]

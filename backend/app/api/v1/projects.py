@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from typing import Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,6 +7,7 @@ from app.dependency import require_permissions_any, get_current_active_user_any
 from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse
 from app.services.project_service import ProjectService
+from app.services.project_init_service import ProjectInitService
 from app.core.pagination import PaginationParams, PaginatedResponse
 from app.core.response import Response
 
@@ -82,6 +83,29 @@ async def update_project(
     service = ProjectService(db)
     project = await service.update_project(project_id, data)
     return Response.success(data=ProjectResponse.model_validate(project).model_dump())
+
+
+@router.post("/{project_id}/code", summary="上传自动化代码包并初始化")
+async def upload_project_code(
+    project_id: int,
+    file: UploadFile = File(..., description="自动化代码压缩包（zip），顶层需为唯一的项目文件夹且内含 tests 目录"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("project:init")),
+):
+    service = ProjectInitService(db)
+    data = await service.upload_and_dispatch(project_id, file, current_user.id)
+    return Response.success(data=data, message="代码初始化任务已提交，请稍后刷新查看结果")
+
+
+@router.post("/{project_id}/code/install", summary="重装项目依赖")
+async def reinstall_project_code(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("project:init")),
+):
+    service = ProjectInitService(db)
+    data = await service.reinstall_and_dispatch(project_id)
+    return Response.success(data=data, message="依赖重装任务已提交，请稍后刷新查看结果")
 
 
 @router.delete("/{project_id}", summary="删除项目")

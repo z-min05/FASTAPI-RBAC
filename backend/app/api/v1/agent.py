@@ -314,6 +314,7 @@ async def stream_send_message(
 
     async def event_stream():
         reply_parts: list[str] = []
+        persisted = False  # 本轮是否已落库，避免异常兜底时重复写入
         try:
             async for ev in agent_runtime.stream_round(
                 ctx["spec"], ctx["input_data"], ctx["config"]
@@ -352,23 +353,44 @@ async def stream_send_message(
                         await service.persist_stream_result(
                             current_user.id, ctx["conv_id"], reply, records
                         )
+                        persisted = True
                     except Exception:
                         logger.warning("流式结果落库异常（不影响本次回复展示）", exc_info=True)
                     yield _sse_event(
                         {"type": "done", "reply": reply, "tokens": _sum_token_stats(records)}
                     )
         except agent_runtime.AgentInvokeError as exc:
-            # 失败/超时：已产生的 token 记录照常落库（审计），不落 assistant 消息
+            # 失败/超时：已产生的 token 照常落库，并落一条 status=failed 的 assistant 消息，
+            # 保留失败前已下发的部分文本；否则用户刷新后只剩自己的提问，
+            # 会误以为 AI 没执行过而重复触发（工具副作用可能已真实发生）
+            tip = "AI 处理超时，请稍后重试或缩短问题" if exc.timed_out else "AI 处理失败，请稍后重试"
             try:
                 await service.persist_stream_result(
-                    current_user.id, ctx["conv_id"], "", exc.records, with_message=False
+                    current_user.id,
+                    ctx["conv_id"],
+                    exc.reply,
+                    exc.records,
+                    status="failed",
+                    error=tip,
                 )
+                persisted = True
             except Exception:
                 logger.warning("流式失败记录落库异常", exc_info=True)
-            tip = "AI 处理超时，请稍后重试或缩短问题" if exc.timed_out else "AI 处理失败，请稍后重试"
             yield _sse_event({"type": "error", "message": tip})
         except Exception:
             logger.exception("流式响应异常 conv_id=%s", conversation_id)
+            if not persisted:
+                try:
+                    await service.persist_stream_result(
+                        current_user.id,
+                        ctx["conv_id"],
+                        "".join(reply_parts),
+                        [],
+                        status="failed",
+                        error="流式响应异常，请稍后重试",
+                    )
+                except Exception:
+                    logger.warning("流式异常记录落库失败", exc_info=True)
             yield _sse_event({"type": "error", "message": "流式响应异常，请稍后重试"})
 
     return StreamingResponse(

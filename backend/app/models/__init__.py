@@ -9,6 +9,7 @@ from app.models.role_menu import role_menus
 from app.models.operation_log import OperationLog
 from app.models.project import Project
 from app.models.testcase import TestCase
+from app.models.testcase_module import TestCaseModule
 from app.models.agent_conversation import AgentConversation
 from app.models.agent_message import AgentMessage
 from app.models.agent_token_record import AgentTokenRecord
@@ -19,6 +20,8 @@ from app.models.case_execution_log import CaseExecutionLog
 from app.models.plan import TestPlan
 from app.models.plan_testcase import PlanTestCase
 from app.models.plan_schedule import PlanSchedule
+from app.models.wecom_robot import WecomRobot
+from app.models.python_env import PythonEnv
 
 __all__ = [
     "User",
@@ -32,6 +35,7 @@ __all__ = [
     "OperationLog",
     "Project",
     "TestCase",
+    "TestCaseModule",
     "TestPlan",
     "PlanTestCase",
     "AgentConversation",
@@ -43,4 +47,5 @@ __all__ = [
     "CaseExecutionLog",
     "PlanSchedule",
     "WecomRobot",
+    "PythonEnv",
 ]

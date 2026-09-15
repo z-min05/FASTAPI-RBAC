@@ -162,14 +162,24 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                     else:
                         body_chunks.append(chunk.decode("utf-8", errors="replace"))
 
-                response_body = "".join(body_chunks)[:4000]
+                full_body = "".join(body_chunks)
+                # 仅审计落库做截断，返回给前端的必须是完整内容
+                response_body = full_body[:4000]
 
-                # 重建 response，因为 body 已被消费
+                # 重建 response，因为 body 已被消费。
+                # 必须剔除原 content-length：Starlette 只在该头缺失时才会按新 body
+                # 重算（见 starlette/responses.py 的 init_headers），否则头部声明的
+                # 长度与实际 body 不一致，浏览器会报 net::ERR_CONTENT_LENGTH_MISMATCH。
                 from starlette.responses import Response as StarletteResponse
+                headers = {
+                    k: v
+                    for k, v in response.headers.items()
+                    if k.lower() != "content-length"
+                }
                 new_response = StarletteResponse(
-                    content=response_body,
+                    content=full_body,
                     status_code=response.status_code,
-                    headers=dict(response.headers),
+                    headers=headers,
                     media_type=response.media_type,
                 )
                 response = new_response

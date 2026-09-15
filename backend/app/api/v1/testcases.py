@@ -22,7 +22,9 @@ router = APIRouter(prefix="/testcases", tags=["用例管理"])
 @router.get("", summary="用例列表")
 async def get_testcases(
     project_id: int | None = Query(None, description="项目 ID"),
-    module: str | None = Query(None, description="模块"),
+    module: str | None = Query(None, description="模块名称（模糊匹配）"),
+    module_id: int | None = Query(None, description="模块 ID"),
+    include_children: bool = Query(True, description="module_id 是否包含其子模块"),
     priority: str | None = Query(None, description="优先级 P0-P3"),
     status: str | None = Query(None, description="状态"),
     source: str | None = Query(None, description="来源"),
@@ -34,7 +36,16 @@ async def get_testcases(
 ):
     service = TestCaseService(db)
     result = await service.get_testcases(
-        params, project_id, module, priority, status, source, keyword, order
+        params,
+        project_id=project_id,
+        module=module,
+        priority=priority,
+        status=status,
+        source=source,
+        keyword=keyword,
+        module_id=module_id,
+        include_children=include_children,
+        order=order,
     )
     raw = result.model_dump()
     return Response.success(data=raw)
@@ -122,7 +133,9 @@ async def import_testcases(
 @router.post("/export", summary="导出用例(CSV)")
 async def export_testcases(
     project_id: int | None = Query(None, description="项目 ID"),
-    module: str | None = Query(None, description="模块"),
+    module: str | None = Query(None, description="模块名称（模糊匹配）"),
+    module_id: int | None = Query(None, description="模块 ID"),
+    include_children: bool = Query(True, description="module_id 是否包含其子模块"),
     priority: str | None = Query(None, description="优先级"),
     status: str | None = Query(None, description="状态"),
     source: str | None = Query(None, description="来源"),
@@ -131,7 +144,16 @@ async def export_testcases(
     current_user: User = Depends(require_permissions_any("testcase:export")),
 ):
     service = TestCaseService(db)
-    content = await service.export_csv(project_id, module, priority, status, source, keyword)
+    content = await service.export_csv(
+        project_id,
+        module,
+        priority,
+        status,
+        source,
+        keyword,
+        module_id,
+        include_children,
+    )
     filename = f"testcases_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
     return Response.success(data={"filename": filename, "content": content})
 

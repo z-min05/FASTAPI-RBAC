@@ -13,9 +13,13 @@ from app.models.testcase import TestCase
 from app.exceptions import BadRequestException
 
 
-# 合法字符正则：允许字母、数字、下划线、短横线（文件名）；仅允许字母数字下划线（函数名）
-# 且必须以 test_ 开头
-ALLOW_MODULE_CODE_PATTERN = re.compile(r"^test_[a-zA-Z0-9_\-]+$")
+# 模块 code（创建/编辑模块时校验）：字符集与长度，目录名与文件名共用
+ALLOW_MODULE_DIR_PATTERN = re.compile(r"^[A-Za-z0-9_\-]{1,100}$")
+# 末级模块 code（创建/编辑用例时校验）：必须是 pytest 文件名
+TEST_FILE_CODE_PATTERN = re.compile(r"^test_[A-Za-z0-9_\-]+$")
+# 模块相对路径：0..n 级目录 + 末级 test_ 开头的文件名，如 device/test_comm_log
+ALLOW_MODULE_CODE_PATTERN = re.compile(r"^(?:[A-Za-z0-9_\-]+/)*test_[A-Za-z0-9_\-]+$")
+# 用例函数名：仅允许字母数字下划线，且必须以 test_ 开头
 ALLOW_CASE_CODE_PATTERN = re.compile(r"^test_[a-zA-Z0-9_]+$")
 
 
@@ -28,11 +32,12 @@ def _is_safe_path(root: Path, target: Path) -> bool:
 
 
 def validate_codes(module_code: str | None, case_code: str | None) -> None:
-    """校验模块编码和用例编码格式（非空都要校验，任一为空不校验对应项）"""
+    """校验模块路径和用例编码格式（非空都要校验，任一为空不校验对应项）"""
     if module_code:
         if not ALLOW_MODULE_CODE_PATTERN.fullmatch(module_code):
             raise BadRequestException(
-                "模块编码格式不合法：必须以 test_ 开头，仅允许字母、数字、下划线、短横线，不能包含路径分隔符"
+                "模块路径格式不合法：多级目录用 / 分隔，末级必须以 test_ 开头，"
+                "仅允许字母、数字、下划线、短横线"
             )
     if case_code:
         if not ALLOW_CASE_CODE_PATTERN.fullmatch(case_code):
@@ -103,36 +108,39 @@ def generate_automation_file(
 ) -> Tuple[bool, str]:
     """
     生成/追加自动化用例文件
+    - tc.module_code 为模块相对路径（如 device/test_comm_log），由模块树推导
+    - 文件不存在则创建（多级目录一并创建）；已存在则只追加用例函数，不覆盖
+    - tc.case_code 为空时只创建文件骨架
     返回 (success, message)，success=False 表示生成失败（但用例仍可保存）
     """
     module_code = tc.module_code
     case_code = tc.case_code
-    # 只有两者都不为空才生成
-    if not (auto_root_path and module_code and case_code):
+    # module_code 恒非空（由模块树推导），这里只要求配置了自动化根路径
+    if not (auto_root_path and module_code):
         return True, ""
 
     # 格式已在创建/更新前校验过，这里再做一次路径安全校验
     root = Path(auto_root_path)
     file_path = (root / f"{module_code}.py").resolve()
     if not _is_safe_path(root, file_path):
-        return False, "模块编码非法，路径越界"
+        return False, "模块路径非法，路径越界"
 
-    # 检查函数是否已存在
+    header = "import pytest\nimport allure\n\n"
+
     if file_path.exists():
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
+        # 未填用例编码：文件已存在则无需改动
+        if not case_code:
+            return True, "文件已存在，跳过生成"
         if function_exists(content, case_code):
             # 已存在，静默成功
             return True, "函数已存在，跳过生成"
         # 追加：两个空行后写入
         new_content = content.rstrip("\n") + "\n\n" + generate_function_text(tc)
     else:
-        # 创建新文件：写入头部导入 + 函数
-        new_content = (
-            "import pytest\n"
-            "import allure\n\n"
-            + generate_function_text(tc)
-        )
+        # 创建新文件：写入头部导入；填了用例编码则一并写入函数
+        new_content = header + (generate_function_text(tc) if case_code else "")
 
     # 写入文件
     try:

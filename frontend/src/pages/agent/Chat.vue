@@ -116,8 +116,20 @@
                 <!-- 流式等待占位 -->
                 <div v-if="showPlaceholder(msg)" class="msg-bubble"><span class="thinking">思考中…</span></div>
 
-                <!-- 错误提示 -->
-                <div v-if="msg.error" class="msg-bubble"><span class="err-text">{{ msg.errorText || '抱歉，请求失败，请稍后重试。' }}</span></div>
+                <!-- 错误提示：失败轮同样落库，重进会话可见（含已执行的动作与中断原因） -->
+                <div v-if="msg.error" class="msg-bubble msg-bubble-error">
+                  <span class="err-text">{{ msg.errorText || '抱歉，请求失败，请稍后重试。' }}</span>
+                  <a-button
+                    v-if="retryText(msg)"
+                    type="link"
+                    size="small"
+                    class="msg-retry"
+                    :disabled="sending"
+                    @click="handleRetry(msg)"
+                  >
+                    <ReloadOutlined /> 重试
+                  </a-button>
+                </div>
 
                 <div class="msg-meta">
                   <template v-if="msg.role === 'assistant'">
@@ -200,7 +212,7 @@ import { useRouter } from 'vue-router'
 import {
   PlusOutlined, DeleteOutlined, SendOutlined, RobotOutlined,
   DownOutlined, RightOutlined, ToolOutlined, LoadingOutlined,
-  BulbOutlined, ScheduleOutlined
+  BulbOutlined, ScheduleOutlined, ReloadOutlined
 } from '@ant-design/icons-vue'
 import {
   listAgentConversations,
@@ -329,7 +341,13 @@ async function loadMessages(convId) {
   messages.value = []
   try {
     const res = await listAgentMessages(convId, { page: 1, page_size: 100 })
-    messages.value = (res.data?.items || []).map(m => ({ ...m, key: `s-${m.id}` }))
+    messages.value = (res.data?.items || []).map(m => ({
+      ...m,
+      key: `s-${m.id}`,
+      // 失败轮的 assistant 消息也会落库：按失败态渲染（保留已生成文本 + 中断原因）
+      error: m.status === 'failed',
+      errorText: m.error || ''
+    }))
     await scrollToBottom()
   } catch (e) {
     // 错误已提示
@@ -431,6 +449,28 @@ async function handleSend() {
   if (!content || sending.value || !currentId.value) return
 
   clearInputBox(content)
+  await sendContent(content)
+}
+
+// 失败轮重试：取该条失败回复之前最近的一条用户消息内容
+function retryText(msg) {
+  const idx = messages.value.findIndex(m => m.key === msg.key)
+  for (let i = idx - 1; i >= 0; i--) {
+    const m = messages.value[i]
+    if (m.role === 'user' && m.content) return m.content
+  }
+  return ''
+}
+
+function handleRetry(msg) {
+  const text = retryText(msg)
+  if (text) sendContent(text)
+}
+
+// 发送一条消息并流式渲染回复（手动发送与失败重试共用）
+async function sendContent(content) {
+  if (sending.value || !currentId.value) return
+
   const ts = Date.now()
   const aiKey = `a-${ts}`
   messages.value.push({ key: `u-${ts}`, role: 'user', content })
@@ -852,6 +892,22 @@ onMounted(async () => {
   background: #1677ff;
   color: #fff;
   border-color: #1677ff;
+}
+
+/* 失败轮提示：红色描边 + 一键重试 */
+.msg-bubble-error {
+  background: #fff2f0;
+  border-color: #ffccc7;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.msg-retry {
+  padding: 0 4px;
+  height: auto;
+  font-size: 13px;
 }
 
 .msg-meta {

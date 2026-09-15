@@ -6,8 +6,7 @@ from app.models.project import Project
 from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectUpdate
 from app.core.pagination import PaginationParams, PaginatedResponse
-from app.exceptions import NotFoundException, ConflictException, BadRequestException
-from app.services.auto_file_service import validate_root_path
+from app.exceptions import NotFoundException, ConflictException
 
 
 class ProjectService:
@@ -47,10 +46,7 @@ class ProjectService:
     async def create_project(self, data: ProjectCreate) -> Project:
         if await self.project_repo.get_by_code(data.code):
             raise ConflictException("项目编码已存在")
-        if data.auto_root_path:
-            ok, msg = validate_root_path(data.auto_root_path)
-            if not ok:
-                raise BadRequestException(msg)
+        # auto_root_path 不在创建时填写，由代码包初始化任务推导写入
         project = Project(**data.model_dump())
         return await self.project_repo.create(project)
 
@@ -60,10 +56,6 @@ class ProjectService:
             existing = await self.project_repo.get_by_code(update_data["code"])
             if existing and existing.id != project_id:
                 raise ConflictException("项目编码已存在")
-        if "auto_root_path" in update_data and update_data["auto_root_path"]:
-            ok, msg = validate_root_path(update_data["auto_root_path"])
-            if not ok:
-                raise BadRequestException(msg)
         project = await self.project_repo.update(project_id, update_data)
         if not project:
             raise NotFoundException("项目不存在")

@@ -86,6 +86,7 @@ backend/detection_results/
 backend/snapshots/
 backend/yolo_models/
 backend/streams/
+backend/agent_workspaces/
 
 # Alembic
 alembic/versions/__pycache__/

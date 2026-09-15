@@ -4,7 +4,7 @@ import io
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select, or_, and_, false
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.testcase_repo import TestCaseRepository
@@ -27,16 +27,17 @@ from app.services.auto_file_service import (
     validate_root_path,
     generate_automation_file,
 )
+from app.services.testcase_module_service import TestCaseModuleService
 
 # CSV 列定义（导入导出共用）
+# 「模块路径」填模块名称链（如 设备管理/通信日志），导入时按名称链匹配末级模块
 CSV_COLUMNS = [
-    "项目编码", "标题", "模块", "优先级", "类型", "来源",
-    "前置条件", "步骤", "预期结果", "状态", "标签",
-    "模块编码", "用例编码",
+    "项目编码", "标题", "模块路径", "优先级", "类型", "来源",
+    "前置条件", "步骤", "预期结果", "状态", "标签", "用例编码",
 ]
 
 # 必填列
-REQUIRED_COLUMNS = {"项目编码", "标题", "模块", "预期结果"}
+REQUIRED_COLUMNS = {"项目编码", "标题", "模块路径", "预期结果"}
 
 # 表头中的必填/非必填标注后缀
 _REQUIRED_SUFFIX = "（必填）"
@@ -58,6 +59,7 @@ class TestCaseService:
         self.testcase_repo = TestCaseRepository(db)
         self.project_repo = ProjectRepository(db)
         self.plan_tc_repo = PlanTestCaseRepository(db)
+        self.module_service = TestCaseModuleService(db)
 
     # ---------- 查询 ----------
 
@@ -69,12 +71,16 @@ class TestCaseService:
         status: str | None = None,
         source: str | None = None,
         keyword: str | None = None,
+        module_ids: list[int] | None = None,
     ) -> list:
         filters = []
         if project_id is not None:
             filters.append(TestCase.project_id == project_id)
         if module:
             filters.append(TestCase.module == module)
+        if module_ids is not None:
+            # 空列表表示该模块下（含子树）没有任何模块可匹配，直接返回恒假条件
+            filters.append(TestCase.module_id.in_(module_ids) if module_ids else false())
         if priority:
             filters.append(TestCase.priority == priority)
         if status:
@@ -89,6 +95,19 @@ class TestCaseService:
                 )
             )
         return filters
+
+    async def _resolve_module_filter(
+        self, project_id: int | None, module_id: int | None, include_children: bool
+    ) -> list[int] | None:
+        """把模块筛选条件展开成 module_id 列表；返回 None 表示不按模块筛选"""
+        if module_id is None:
+            return None
+        if not include_children:
+            return [module_id]
+        # include_children 需要 project_id 才能在项目内收集子树；缺失时退化为精确匹配
+        if project_id is None:
+            return [module_id]
+        return await self.module_service.collect_subtree_module_ids(project_id, module_id)
 
     async def get_testcase(self, testcase_id: int) -> TestCase:
         tc = await self.testcase_repo.get_by_id(testcase_id)
@@ -105,9 +124,14 @@ class TestCaseService:
         status: str | None = None,
         source: str | None = None,
         keyword: str | None = None,
+        module_id: int | None = None,
+        include_children: bool = True,
         order: str = "desc",
     ) -> PaginatedResponse:
-        filters = self._build_filters(project_id, module, priority, status, source, keyword)
+        module_ids = await self._resolve_module_filter(project_id, module_id, include_children)
+        filters = self._build_filters(
+            project_id, module, priority, status, source, keyword, module_ids
+        )
         result = await self.testcase_repo.get_paginated(params, filters or None, order)
 
         project_map = await self._get_project_map([tc.project_id for tc in result.items])
@@ -135,6 +159,7 @@ class TestCaseService:
             project_id=tc.project_id,
             project_code=proj.code if proj else None,
             project_name=proj.name if proj else None,
+            module_id=tc.module_id,
             title=tc.title,
             module=tc.module,
             priority=tc.priority,
@@ -158,17 +183,22 @@ class TestCaseService:
 
     async def create_testcase(self, data: TestCaseCreate) -> TestCase:
         project = await self._ensure_project_active(data.project_id)
+        # 只能挂在末级模块下；module / module_code 由模块树推导，不接受前端传入
+        node, module_path = await self.module_service.require_leaf_module(
+            data.project_id, data.module_id
+        )
         # 空字符串转为 None，避免与数据库条件唯一索引冲突
-        module_code = data.module_code or None
-        case_code = data.case_code or None
-        validate_codes(module_code, case_code)
-        await self._check_uniqueness(data.project_id, module_code, case_code)
+        case_code = (data.case_code or "").strip() or None
+        validate_codes(module_path, case_code)
+        await self._check_uniqueness(data.project_id, node.id, case_code)
+
         raw = data.model_dump()
-        raw["module_code"] = module_code
         raw["case_code"] = case_code
+        raw["module"] = node.name
+        raw["module_code"] = module_path
         tc = TestCase(**raw)
         created = await self.testcase_repo.create(tc)
-        # 尝试生成自动化文件
+        # 生成/追加自动化文件（文件不存在则创建，已存在则只追加）
         await self._generate_auto_file(project, created)
         return created
 
@@ -177,31 +207,40 @@ class TestCaseService:
         if not tc:
             raise NotFoundException("用例不存在")
         update_data = data.model_dump(exclude_unset=True)
-        new_project_id = update_data.get("project_id")
-        # 空字符串转为 None，避免条件唯一索引冲突
-        new_module_code = update_data.pop("module_code", tc.module_code)
-        new_module_code = new_module_code or None
-        new_case_code = update_data.pop("case_code", tc.case_code)
-        new_case_code = new_case_code or None
-        update_data["module_code"] = new_module_code
-        update_data["case_code"] = new_case_code
-        project = None
-        if new_project_id is not None and new_project_id != tc.project_id:
+
+        new_project_id = update_data.get("project_id") or tc.project_id
+        if new_project_id != tc.project_id:
             project = await self._ensure_project_active(new_project_id)
         else:
-            project = await self.project_repo.get_by_id(new_project_id or tc.project_id)
-        # 校验格式与唯一性
-        if "module_code" in update_data or "case_code" in update_data:
-            validate_codes(new_module_code, new_case_code)
-            await self._check_uniqueness(
-                new_project_id or tc.project_id,
-                new_module_code,
-                new_case_code,
-                exclude_id=tc.id,
+            project = await self.project_repo.get_by_id(new_project_id)
+
+        new_module_id = update_data.get("module_id", tc.module_id)
+        # 空字符串转为 None，避免条件唯一索引冲突
+        new_case_code = (update_data.get("case_code", tc.case_code) or "").strip() or None
+
+        need_resolve = (
+            new_module_id != tc.module_id
+            or new_project_id != tc.project_id
+            or new_case_code != tc.case_code
+        )
+        if need_resolve:
+            if new_module_id is None:
+                raise BadRequestException("请选择所属末级模块")
+            node, module_path = await self.module_service.require_leaf_module(
+                new_project_id, new_module_id
             )
+            validate_codes(module_path, new_case_code)
+            await self._check_uniqueness(
+                new_project_id, node.id, new_case_code, exclude_id=tc.id
+            )
+            update_data["module_id"] = node.id
+            update_data["module"] = node.name
+            update_data["module_code"] = module_path
+            update_data["case_code"] = new_case_code
+
         updated = await self.testcase_repo.update(testcase_id, update_data)
-        # 尝试生成自动化文件（用更新后的值）
-        if project and updated.module_code and updated.case_code:
+        # 生成/追加自动化文件（用更新后的值）
+        if project and updated.module_code:
             await self._generate_auto_file(project, updated)
         return updated
 
@@ -213,13 +252,19 @@ class TestCaseService:
             raise BadRequestException("项目已停用，不能在该项目下操作用例")
         return project
 
-    async def _check_uniqueness(self, project_id: int, module_code: str | None, case_code: str | None, exclude_id: int | None = None) -> None:
-        """校验同一项目下 (module_code, case_code) 组合唯一"""
-        if not module_code or not case_code:
+    async def _check_uniqueness(
+        self,
+        project_id: int,
+        module_id: int | None,
+        case_code: str | None,
+        exclude_id: int | None = None,
+    ) -> None:
+        """校验同一项目同一模块下用例编码唯一（模块路径由模块树保证项目内唯一）"""
+        if module_id is None or not case_code:
             return
         filters = [
             TestCase.project_id == project_id,
-            TestCase.module_code == module_code,
+            TestCase.module_id == module_id,
             TestCase.case_code == case_code,
         ]
         if exclude_id is not None:
@@ -227,13 +272,14 @@ class TestCaseService:
         stmt = select(TestCase.id).where(and_(*filters)).limit(1)
         result = (await self.db.execute(stmt)).scalar()
         if result is not None:
-            raise ConflictException(
-                f"该项目下已存在相同模块编码+用例编码的组合（模块编码: {module_code}，用例编码: {case_code}）"
-            )
+            raise ConflictException(f"该模块下已存在相同的用例编码：{case_code}")
 
     async def _generate_auto_file(self, project: Project, tc: TestCase) -> dict:
-        """尝试生成自动化文件，返回 {generated: bool,  message: str}"""
-        if not (project.auto_root_path and tc.module_code and tc.case_code):
+        """尝试生成自动化文件，返回 {generated: bool,  message: str}
+
+        只要配置了自动化根路径就生成：module_code 恒非空，case_code 为空时只建文件骨架。
+        """
+        if not (project.auto_root_path and tc.module_code):
             return {"generated": False, "message": ""}
         ok, msg = generate_automation_file(project.auto_root_path, tc)
         if not ok:
@@ -274,16 +320,16 @@ class TestCaseService:
         for i, col in enumerate(CSV_COLUMNS, start=1):
             ws.cell(row=1, column=i, value=header_cell(col))
 
-        # 示例行（按需替换，导入前可删除）
+        # 示例行（按需替换，导入前可删除）；「模块路径」填模块名称链，需与模块树中已存在的末级模块一致
         ws.append([
-            "DEMO", "示例用例-登录功能", "login", "P1", "function", "需求文档",
+            "DEMO", "示例用例-登录功能", "登录模块/测试登录", "P1", "function", "需求文档",
             "已注册测试账号", "1. 打开登录页\n2. 输入账号密码\n3. 点击登录",
             "登录成功并跳转首页", "reviewed", "冒烟,登录",
-            "test_login", "test_login_success",
+            "test_login_success",
         ])
 
-        for col, width in {"A": 12, "B": 20, "C": 12, "D": 10, "E": 10, "F": 12,
-                           "G": 14, "H": 30, "I": 22, "J": 10, "K": 14, "L": 16, "M": 18}.items():
+        for col, width in {"A": 12, "B": 20, "C": 22, "D": 10, "E": 10, "F": 12,
+                           "G": 14, "H": 30, "I": 22, "J": 10, "K": 14, "L": 18}.items():
             ws.column_dimensions[col].width = width
 
         buf = io.BytesIO()
@@ -298,15 +344,24 @@ class TestCaseService:
         status: str | None = None,
         source: str | None = None,
         keyword: str | None = None,
+        module_id: int | None = None,
+        include_children: bool = True,
     ) -> str:
         """按筛选条件导出全部用例为 CSV 文本（UTF-8 BOM）"""
-        filters = self._build_filters(project_id, module, priority, status, source, keyword)
+        module_ids = await self._resolve_module_filter(project_id, module_id, include_children)
+        filters = self._build_filters(
+            project_id, module, priority, status, source, keyword, module_ids
+        )
         stmt = select(TestCase).order_by(TestCase.id)
         if filters:
             stmt = stmt.where(*filters)
         result = await self.db.execute(stmt)
         testcases = list(result.scalars().all())
         project_map = await self._get_project_map([tc.project_id for tc in testcases])
+        # 「模块路径」列导出为模块名称链（与导入时按名称链匹配保持一致）
+        name_path_map = await self.module_service.get_name_path_map(
+            [tc.project_id for tc in testcases]
+        )
 
         buf = io.StringIO()
         buf.write("\ufeff")
@@ -317,7 +372,7 @@ class TestCaseService:
             writer.writerow([
                 proj.code if proj else "",
                 tc.title,
-                tc.module,
+                name_path_map.get(tc.module_id, tc.module or ""),
                 tc.priority,
                 tc.case_type,
                 tc.source or "",
@@ -326,7 +381,6 @@ class TestCaseService:
                 tc.expected_result,
                 tc.status,
                 tc.tags or "",
-                tc.module_code or "",
                 tc.case_code or "",
             ])
         return buf.getvalue()
@@ -379,7 +433,11 @@ class TestCaseService:
         return await self._import_records(records)
 
     async def _import_records(self, records: list[dict]) -> dict:
-        """校验并写入记录（CSV / xlsx 共用），返回 {success, failures}"""
+        """校验并写入记录（CSV / xlsx 共用），返回 {success, failures}
+
+        「模块路径」为模块名称链（如 设备管理/通信日志），按名称链匹配已存在的末级模块，
+        不自动创建模块；找不到或指向分组目录都会记为失败。
+        """
         projects = await self.project_repo.get_active_all()
         code_to_project = {p.code: p for p in projects}
 
@@ -392,8 +450,8 @@ class TestCaseService:
                 errors.append(f"项目编码不存在或已停用: {record['项目编码']}")
             if not record["标题"]:
                 errors.append("标题不能为空")
-            if not record["模块"]:
-                errors.append("模块不能为空")
+            if not record["模块路径"]:
+                errors.append("模块路径不能为空")
             if not record["预期结果"]:
                 errors.append("预期结果不能为空")
 
@@ -407,15 +465,21 @@ class TestCaseService:
             if status not in ALLOWED_STATUS:
                 errors.append(f"状态不合法: {status}")
 
-            module_code = record.get("模块编码", "").strip() or None
-            case_code = record.get("用例编码", "").strip() or None
+            case_code = (record.get("用例编码") or "").strip() or None
 
-            try:
-                validate_codes(module_code, case_code)
-                if module_code and case_code:
-                    await self._check_uniqueness(project.id, module_code, case_code)
-            except BadRequestException as e:
-                errors.append(str(e))
+            node = None
+            if project and record["模块路径"]:
+                try:
+                    node = await self.module_service.find_leaf_by_name_path(
+                        project.id, record["模块路径"]
+                    )
+                    module_path = await self.module_service.get_module_path(node)
+                    validate_codes(module_path, case_code)
+                    await self._check_uniqueness(project.id, node.id, case_code)
+                except BadRequestException as e:
+                    errors.append(str(e))
+                except ConflictException as e:
+                    errors.append(str(e))
 
             if errors:
                 failures.append({"line": idx, "errors": errors})
@@ -423,8 +487,10 @@ class TestCaseService:
 
             tc = TestCase(
                 project_id=project.id,
+                module_id=node.id,
+                module=node.name,
+                module_code=module_path,
                 title=record["标题"],
-                module=record["模块"],
                 priority=priority,
                 case_type=case_type,
                 source=record["来源"] or None,
@@ -433,12 +499,12 @@ class TestCaseService:
                 expected_result=record["预期结果"],
                 status=status,
                 tags=record["标签"] or None,
-                module_code=module_code,
                 case_code=case_code,
             )
             self.db.add(tc)
+            await self.db.flush()
             # 生成文件不影响入库，只记录生成信息
-            if project.auto_root_path and module_code and case_code:
+            if project.auto_root_path:
                 result = await self._generate_auto_file(project, tc)
                 if not result["generated"]:
                     # 生成失败但入库成功，记录警告
