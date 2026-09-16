@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile
+from fastapi.responses import FileResponse
+from pathlib import Path
 from typing import Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -116,6 +118,24 @@ async def reinstall_project_code(
     service = ProjectInitService(db)
     data = await service.reinstall_and_dispatch(project_id)
     return Response.success(data=data, message="依赖重装任务已提交，请稍后刷新查看结果")
+
+
+@router.get("/{project_id}/auto-code/zip", summary="打包下载项目自动化代码(zip)")
+async def download_project_auto_code(
+    project_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("project:code:download")),
+):
+    service = ProjectInitService(db)
+    zip_path, filename = await service.stage_auto_code_zip(project_id)
+    # 响应发送完成后再删除临时包，避免占用磁盘
+    background_tasks.add_task(Path(zip_path).unlink, missing_ok=True)
+    return FileResponse(
+        path=zip_path,
+        media_type="application/zip",
+        filename=filename,
+    )
 
 
 @router.delete("/{project_id}", summary="删除项目")

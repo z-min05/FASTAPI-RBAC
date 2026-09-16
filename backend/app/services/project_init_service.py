@@ -362,6 +362,63 @@ def find_requirements(project_root: Path) -> Path | None:
     return None
 
 
+# ==================== 打包下载 ====================
+
+# 打包时排除的目录名（缓存/虚拟环境/版本库/测试报告产物）
+_ZIP_EXCLUDE_DIRS = {
+    "__pycache__", ".git", ".svn", ".hg", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", ".tox", ".venv", "venv", ".idea", ".vscode",
+    "node_modules", "allure-results", "allure-report", "htmlcov", ".eggs",
+}
+
+# 打包时排除的文件后缀
+_ZIP_EXCLUDE_SUFFIX = (".pyc", ".pyo", ".pyd")
+
+# 文件名非法字符（用于拼下载文件名）
+_BAD_FILENAME_RE = re.compile(r'[\\/:*?"<>|\r\n\t]')
+
+
+def safe_filename(name: str) -> str:
+    """把用户输入清洗成可安全放入响应头的文件名片段"""
+    cleaned = _BAD_FILENAME_RE.sub("_", (name or "").strip())
+    return cleaned or "project"
+
+
+def _zip_project(root: Path, dest: Path) -> tuple[int, int]:
+    """把 root 目录打包为 dest（zip 内顶层目录名为 root.name），返回 (文件数, 字节数)"""
+    max_files = settings.PROJECT_CODE_MAX_FILES
+    max_bytes = settings.PROJECT_CODE_MAX_UNCOMPRESSED_MB * 1024 * 1024
+    count = 0
+    total = 0
+
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+        for dirpath, dirnames, filenames in os.walk(root):
+            # 就地剪枝，避免走进 .venv/.git 等目录
+            dirnames[:] = sorted(d for d in dirnames if d not in _ZIP_EXCLUDE_DIRS)
+            rel_dir = Path(dirpath).relative_to(root)
+            if rel_dir.parts:
+                zf.writestr(f"{root.name}/{rel_dir.as_posix()}/", "")
+            for filename in sorted(filenames):
+                if Path(filename).suffix.lower() in _ZIP_EXCLUDE_SUFFIX:
+                    continue
+                src = Path(dirpath) / filename
+                if src.is_symlink() or not src.is_file():
+                    continue
+                count += 1
+                if count > max_files:
+                    raise BadRequestException(
+                        f"待打包文件数超过上限 {max_files}，请先清理项目目录"
+                    )
+                total += src.stat().st_size
+                if total > max_bytes:
+                    raise BadRequestException(
+                        f"待打包体积超过上限 {settings.PROJECT_CODE_MAX_UNCOMPRESSED_MB}MB"
+                    )
+                rel_file = rel_dir / filename if rel_dir.parts else Path(filename)
+                zf.write(src, f"{root.name}/{rel_file.as_posix()}")
+    return count, total
+
+
 # ==================== 依赖安装 ====================
 
 
@@ -639,6 +696,38 @@ class ProjectInitService:
             "project_dir": proj_dir,
             "code_init_status": "pending",
         }
+
+    async def stage_auto_code_zip(self, project_id: int) -> tuple[Path, str]:
+        """打包该项目自动化代码所在的项目目录，返回 (临时 zip 路径, 下载文件名)
+
+        自动化根路径形如 {BASE_DIR}/<项目目录>/tests，这里打包的是它所在的
+        整个项目目录 <项目目录>（含 tests、requirements.txt 等）。
+        """
+        project = await self._get_project(project_id)
+        raw = (project.auto_root_path or "").strip()
+        if not raw:
+            raise BadRequestException("该项目尚未生成自动化根路径，请先上传代码包并完成初始化")
+
+        tests_dir = Path(raw)
+        if not tests_dir.is_dir():
+            raise BadRequestException(f"自动化根路径不存在或不是目录: {raw}")
+
+        proj_root = tests_dir.resolve().parent
+        if not proj_root.is_dir() or proj_root == Path(proj_root.anchor):
+            raise BadRequestException(f"项目目录不合法，无法打包: {proj_root}")
+
+        dest = tmp_root() / f"auto_code_{project_id}_{uuid.uuid4().hex}.zip"
+        try:
+            files, size = await asyncio.to_thread(_zip_project, proj_root, dest)
+        except Exception:
+            dest.unlink(missing_ok=True)
+            raise
+
+        logger.info(
+            f"[项目自动化代码下载] project_id={project_id} "
+            f"目录={proj_root} 文件数={files} 字节={size}"
+        )
+        return dest, f"{safe_filename(project.name)}_{proj_root.name}.zip"
 
     async def get_code_template(self) -> dict:
         """读取项目自动化模版压缩包，返回 {filename, content(base64), is_base64}"""

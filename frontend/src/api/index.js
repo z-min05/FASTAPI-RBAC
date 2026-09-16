@@ -38,9 +38,17 @@ request.interceptors.response.use(
     }
     return res
   },
-  (error) => {
+  async (error) => {
     if (error.response) {
-      const { status, data } = error.response
+      let { status, data } = error.response
+      // blob 响应（文件下载）出错时响应体是 Blob，先读出来才能拿到后端错误信息
+      if (data instanceof Blob) {
+        try {
+          data = JSON.parse(await data.text())
+        } catch {
+          data = null
+        }
+      }
       const errMsg = data?.detail || data?.message || '请求失败'
       if (status === 401) {
         // 登录接口的401是用户名/密码错误，其他接口的401才是token过期

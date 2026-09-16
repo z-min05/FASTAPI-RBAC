@@ -48,3 +48,12 @@ export function reinstallProjectCodeDeps(projectId) {
 export function downloadProjectCodeTemplate() {
   return request.get('/projects/code-template')
 }
+
+// 打包下载该项目的自动化代码（自动化根路径所在的整个项目目录，返回 zip 文件流）
+// 打包在服务端完成，文件可能较大，关闭超时避免被中断
+export function downloadProjectAutoCode(projectId) {
+  return request.get(`/projects/${projectId}/auto-code/zip`, {
+    responseType: 'blob',
+    timeout: 0
+  })
+}

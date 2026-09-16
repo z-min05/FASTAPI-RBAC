@@ -75,6 +75,18 @@
               v-permission="'project:init'"
               @click="handleReinstall(record)"
             >重装依赖</a-button>
+            <a-popconfirm
+              title="打包并下载该项目的自动化代码（整个项目目录）？"
+              @confirm="handleDownloadAutoCode(record)"
+            >
+              <a-button
+                type="link"
+                size="small"
+                v-permission="'project:code:download'"
+                :disabled="!record.auto_root_path"
+                :loading="codeDownloadingId === record.id"
+              >代码下载</a-button>
+            </a-popconfirm>
             <a-popconfirm title="确定删除该项目？" @confirm="handleDelete(record.id)">
               <a-button type="link" size="small" danger v-permission="'project:delete'">删除</a-button>
             </a-popconfirm>
@@ -210,7 +222,8 @@ import {
   getOwnerOptions,
   uploadProjectCode,
   reinstallProjectCodeDeps,
-  downloadProjectCodeTemplate
+  downloadProjectCodeTemplate,
+  downloadProjectAutoCode
 } from '@/api/project'
 import { getPythonEnvOptions } from '@/api/pythonEnv'
 import dayjs from 'dayjs'
@@ -248,7 +261,7 @@ const columns = computed(() => [
   },
   { title: '自动化根路径', dataIndex: 'auto_root_path', key: 'auto_root_path', ellipsis: true, width: 200 },
   { title: 'Python 路径', dataIndex: 'python_path', key: 'python_path', ellipsis: true, width: 200 },
-  { title: '操作', key: 'action', width: 240, fixed: 'right' }
+  { title: '操作', key: 'action', width: 320, fixed: 'right' }
 ])
 
 const tableData = ref([])
@@ -445,6 +458,36 @@ async function handleDownloadTemplate() {
     // 错误已由拦截器提示
   } finally {
     templateLoading.value = false
+  }
+}
+
+// 打包下载该项目的自动化代码（服务端把自动化根路径所在的项目目录打成 zip）
+const codeDownloadingId = ref(null)
+
+function autoCodeZipName(record) {
+  const parts = String(record.auto_root_path || '')
+    .split(/[\\/]/)
+    .filter(Boolean)
+  const dir = parts.length >= 2 ? parts[parts.length - 2] : record.code || 'project'
+  const safeName = String(record.name || '').replace(/[\\/:*?"<>|]/g, '_').trim()
+  return `${safeName ? `${safeName}_` : ''}${dir}.zip`
+}
+
+async function handleDownloadAutoCode(record) {
+  if (codeDownloadingId.value) return
+  codeDownloadingId.value = record.id
+  try {
+    const blob = await downloadProjectAutoCode(record.id)
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = autoCodeZipName(record)
+    link.click()
+    URL.revokeObjectURL(link.href)
+    message.success('自动化代码打包完成，开始下载')
+  } catch (e) {
+    // 错误已由拦截器提示
+  } finally {
+    codeDownloadingId.value = null
   }
 }
 
