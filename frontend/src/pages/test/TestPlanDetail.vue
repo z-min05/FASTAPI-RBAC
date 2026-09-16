@@ -60,6 +60,16 @@
         />
         <a-button @click="resetFilter">重置</a-button>
         <a-button
+          :loading="selectingAll"
+          :disabled="!pagination.total"
+          @click="handleSelectAll"
+        >
+          全选所有页
+        </a-button>
+        <a-button v-if="selectedRowKeys.length > 0" @click="clearSelection">
+          取消选择
+        </a-button>
+        <a-button
           v-if="selectedRowKeys.length > 0"
           type="primary"
           @click="handleBatchExecute"
@@ -94,7 +104,8 @@
       :row-selection="{
         selectedRowKeys,
         onChange: onSelectChange,
-        getCheckboxProps: r => ({ disabled: !(r.module_code && r.case_code) || r.result === 'running' })
+        preserveSelectedRowKeys: true,
+        getCheckboxProps: r => ({ disabled: !isSelectable(r) })
       }"
     >
       <template #bodyCell="{ column, record }">
@@ -191,7 +202,24 @@
           @search="loadCandidates"
           allow-clear
         />
-        <span class="selected-tip">已选 {{ candidateSelected.length }} 条</span>
+        <div class="add-toolbar-right">
+          <a-button
+            size="small"
+            :loading="candidateSelectingAll"
+            :disabled="!candidatePagination.total"
+            @click="handleCandidateSelectAll"
+          >
+            全选所有页
+          </a-button>
+          <a-button
+            v-if="candidateSelected.length > 0"
+            size="small"
+            @click="clearCandidateSelection"
+          >
+            取消选择
+          </a-button>
+          <span class="selected-tip">已选 {{ candidateSelected.length }} 条</span>
+        </div>
       </div>
       <a-table
         :columns="candidateColumns"
@@ -199,7 +227,11 @@
         :loading="candidateLoading"
         :pagination="candidatePagination"
         @change="handleCandidateChange"
-        :row-selection="{ selectedRowKeys: candidateSelected, onChange: onCandidateSelect }"
+        :row-selection="{
+          selectedRowKeys: candidateSelected,
+          onChange: onCandidateSelect,
+          preserveSelectedRowKeys: true
+        }"
         row-key="id"
         size="small"
         :scroll="{ y: 420 }"
@@ -535,10 +567,55 @@ const pageLoading = ref(true)
 const pageError = ref('')
 const loading = ref(false)
 
-// 行选择（批量执行）
+// 行选择（批量执行）：跨页保留，切页/筛选不会清空已勾选
 const selectedRowKeys = ref([])
+const selectingAll = ref(false)
 function onSelectChange(keys) {
   selectedRowKeys.value = keys
+}
+function clearSelection() {
+  selectedRowKeys.value = []
+}
+// 可勾选规则：有自动化编码且未在执行中（与复选框禁用规则一致）
+function isSelectable(record) {
+  return !!(record.module_code && record.case_code) && record.result !== 'running'
+}
+function currentPlanCaseParams(page, pageSize) {
+  const params = { page, page_size: pageSize }
+  if (keyword.value) params.keyword = keyword.value
+  if (resultFilter.value) params.result = resultFilter.value
+  if (testerFilter.value !== null && testerFilter.value !== undefined) {
+    params.tester_id = testerFilter.value
+  }
+  return params
+}
+// 全选所有页：按当前筛选条件逐页拉取，仅勾选可执行用例
+async function handleSelectAll() {
+  selectingAll.value = true
+  try {
+    const ids = []
+    let page = 1
+    const pageSize = 100
+    while (page > 0) {
+      const res = await getPlanTestcases(
+        planId,
+        currentPlanCaseParams(page, pageSize)
+      )
+      const items = res.data.items || []
+      items.forEach(tc => {
+        if (isSelectable(tc)) ids.push(tc.id)
+      })
+      const total = res.data.total || 0
+      if (!items.length || page * pageSize >= total) break
+      page += 1
+    }
+    selectedRowKeys.value = ids
+    if (!ids.length) message.warning('当前筛选条件下没有可执行的用例')
+  } catch (e) {
+    // 错误已由拦截器提示
+  } finally {
+    selectingAll.value = false
+  }
 }
 
 // 结果弹窗宽度响应式
@@ -717,11 +794,10 @@ const pagination = reactive({
 async function loadTestcases() {
   loading.value = true
   try {
-    const params = { page: pagination.current, page_size: pagination.pageSize }
-    if (keyword.value) params.keyword = keyword.value
-    if (resultFilter.value) params.result = resultFilter.value
-    if (testerFilter.value !== null && testerFilter.value !== undefined) params.tester_id = testerFilter.value
-    const res = await getPlanTestcases(planId, params)
+    const res = await getPlanTestcases(
+      planId,
+      currentPlanCaseParams(pagination.current, pagination.pageSize)
+    )
     tableData.value = res.data.items || []
     pagination.total = res.data.total || 0
   } finally {
@@ -778,6 +854,7 @@ const candidateKeyword = ref('')
 const candidateData = ref([])
 const candidateLoading = ref(false)
 const candidateSelected = ref([])
+const candidateSelectingAll = ref(false)
 const adding = ref(false)
 const candidatePagination = reactive({
   current: 1,
@@ -819,6 +896,36 @@ function openAddModal() {
 
 function onCandidateSelect(keys) {
   candidateSelected.value = keys
+}
+
+function clearCandidateSelection() {
+  candidateSelected.value = []
+}
+
+// 全选所有页：按当前搜索条件逐页拉取全部候选用例
+async function handleCandidateSelectAll() {
+  candidateSelectingAll.value = true
+  try {
+    const ids = []
+    let page = 1
+    const pageSize = 100
+    while (page > 0) {
+      const params = { page, page_size: pageSize }
+      if (candidateKeyword.value) params.keyword = candidateKeyword.value
+      const res = await getPlanCandidates(planId, params)
+      const items = res.data.items || []
+      items.forEach(tc => ids.push(tc.id))
+      const total = res.data.total || 0
+      if (!items.length || page * pageSize >= total) break
+      page += 1
+    }
+    candidateSelected.value = ids
+    if (!ids.length) message.warning('当前条件下没有可添加的用例')
+  } catch (e) {
+    // 错误已由拦截器提示
+  } finally {
+    candidateSelectingAll.value = false
+  }
 }
 
 function handleCandidateChange(pag) {
@@ -1258,6 +1365,11 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+}
+.add-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .selected-tip {
   color: #666;

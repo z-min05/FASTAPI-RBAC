@@ -28,6 +28,7 @@ TEST_PERMISSIONS = [
     {"name": "更新项目", "code": "project:update", "module": "project", "action": "update"},
     {"name": "删除项目", "code": "project:delete", "module": "project", "action": "delete"},
     {"name": "项目代码初始化", "code": "project:init", "module": "project", "action": "init"},
+    {"name": "项目自动化模版下载", "code": "project:template", "module": "project", "action": "template"},
     {"name": "用例列表", "code": "testcase:list", "module": "testcase", "action": "list"},
     {"name": "用例详情", "code": "testcase:detail", "module": "testcase", "action": "detail"},
     {"name": "创建用例", "code": "testcase:create", "module": "testcase", "action": "create"},
@@ -69,6 +70,7 @@ TEST_MENUS = [
                     {"name": "编辑项目", "menu_type": "button", "permission": "project:update", "sort": 2},
                     {"name": "删除项目", "menu_type": "button", "permission": "project:delete", "sort": 3},
                     {"name": "代码初始化", "menu_type": "button", "permission": "project:init", "sort": 4},
+                    {"name": "自动化模版下载", "menu_type": "button", "permission": "project:template", "sort": 5},
                 ],
             },
             {

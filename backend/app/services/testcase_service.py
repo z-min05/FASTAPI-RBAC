@@ -26,8 +26,10 @@ from app.services.auto_file_service import (
     validate_codes,
     validate_root_path,
     generate_automation_file,
+    remove_automation_cases,
 )
 from app.services.testcase_module_service import TestCaseModuleService
+from app.utils.logger import logger
 
 # CSV 列定义（导入导出共用）
 # 「模块路径」填模块名称链（如 设备管理/通信日志），导入时按名称链匹配末级模块
@@ -290,14 +292,47 @@ class TestCaseService:
         refs = await self.plan_tc_repo.count_by_testcase(testcase_id)
         if refs > 0:
             raise ConflictException(f"用例已被 {refs} 个测试计划引用，请先从计划中移除后再删除")
+        tc = await self.testcase_repo.get_by_id(testcase_id)
+        if not tc:
+            raise NotFoundException("用例不存在")
+        auto_items = [(tc.project_id, tc.module_code, tc.case_code)]
         if not await self.testcase_repo.delete(testcase_id):
             raise NotFoundException("用例不存在")
+        await self._remove_auto_code(auto_items)
 
     async def delete_testcases(self, ids: list[int]) -> int:
         refs = await self.plan_tc_repo.count_by_testcases(ids)
         if refs > 0:
             raise ConflictException("存在被测试计划引用的用例，请先从计划中移除后再批量删除")
-        return await self.testcase_repo.delete_batch(ids)
+        result = await self.db.execute(select(TestCase).where(TestCase.id.in_(ids)))
+        auto_items = [
+            (tc.project_id, tc.module_code, tc.case_code)
+            for tc in result.scalars().all()
+        ]
+        count = await self.testcase_repo.delete_batch(ids)
+        await self._remove_auto_code(auto_items)
+        return count
+
+    async def _remove_auto_code(
+        self, items: list[tuple[int, str | None, str | None]]
+    ) -> None:
+        """删除用例后清理对应的自动化代码（未配置根路径或未填编码时静默跳过）
+
+        文件清理为尽力而为：失败只记录日志，不影响用例删除结果。
+        """
+        by_project: dict[int, list[tuple[str | None, str | None]]] = {}
+        for project_id, module_code, case_code in items:
+            if module_code and case_code:
+                by_project.setdefault(project_id, []).append((module_code, case_code))
+        for project_id, project_items in by_project.items():
+            project = await self.project_repo.get_by_id(project_id)
+            if not project or not project.auto_root_path:
+                continue
+            ok, msg = remove_automation_cases(project.auto_root_path, project_items)
+            if not ok:
+                logger.warning(f"[自动化代码清理] 项目 {project_id} 清理失败: {msg}")
+            elif msg:
+                logger.info(f"[自动化代码清理] 项目 {project_id} {msg}")
 
     # ---------- CSV 导入导出 ----------
 

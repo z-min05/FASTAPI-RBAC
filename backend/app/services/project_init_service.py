@@ -128,6 +128,23 @@ def tmp_root() -> Path:
     return root
 
 
+def template_zip_path() -> Path:
+    """项目自动化模版压缩包路径（来自配置文件），已校验存在且为 zip 文件"""
+    raw = (settings.PROJECT_CODE_TEMPLATE_ZIP or "").strip()
+    if not raw:
+        raise BadRequestException(
+            "未配置项目自动化模版压缩包，请在服务端 .env 中配置 PROJECT_CODE_TEMPLATE_ZIP"
+        )
+    path = Path(raw)
+    if not path.exists():
+        raise BadRequestException(f"项目自动化模版压缩包不存在: {raw}")
+    if not path.is_file():
+        raise BadRequestException(f"项目自动化模版必须是文件: {raw}")
+    if path.suffix.lower() != ".zip":
+        raise BadRequestException("项目自动化模版必须是 .zip 格式的压缩包")
+    return path
+
+
 def _is_within(root: Path, target: Path) -> bool:
     """校验 target 是否落在 root 内（防 ../ 越界）"""
     try:
@@ -621,6 +638,18 @@ class ProjectInitService:
             "project_id": project_id,
             "project_dir": proj_dir,
             "code_init_status": "pending",
+        }
+
+    async def get_code_template(self) -> dict:
+        """读取项目自动化模版压缩包，返回 {filename, content(base64), is_base64}"""
+        import base64
+
+        path = template_zip_path()
+        content = await asyncio.to_thread(path.read_bytes)
+        return {
+            "filename": path.name,
+            "content": base64.b64encode(content).decode("ascii"),
+            "is_base64": True,
         }
 
     async def reinstall_and_dispatch(self, project_id: int) -> dict:

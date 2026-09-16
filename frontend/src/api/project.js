@@ -43,3 +43,8 @@ export function uploadProjectCode(projectId, file) {
 export function reinstallProjectCodeDeps(projectId) {
   return request.post(`/projects/${projectId}/code/install`)
 }
+
+// 下载项目自动化模版压缩包（服务端 PROJECT_CODE_TEMPLATE_ZIP 指向的文件）
+export function downloadProjectCodeTemplate() {
+  return request.get('/projects/code-template')
+}

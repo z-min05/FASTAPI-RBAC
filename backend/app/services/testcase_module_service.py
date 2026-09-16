@@ -11,6 +11,8 @@
 - 模块 code 一律必填，为磁盘上的目录名或文件名
 - 末级模块的 code 必须以 test_ 开头（校验时机在创建/编辑用例）
 - 改名/移动只重算数据库路径，不搬迁磁盘文件
+- 磁盘形态由末级状态派生：分组模块 → 目录，末级模块 → .py 文件；
+  创建模块本身不落盘，仅在其父模块变为分组（新增/移入子模块）或重新变为末级（子模块删光）时对齐父模块
 """
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +27,10 @@ from app.schemas.testcase_module import TestCaseModuleCreate, TestCaseModuleUpda
 from app.services.auto_file_service import (
     ALLOW_MODULE_DIR_PATTERN,
     TEST_FILE_CODE_PATTERN,
+    align_module_disk_entity,
+    remove_automation_module,
 )
+from app.utils.logger import logger
 
 # 祖先链回溯深度上限，防止脏数据造成的环路导致死循环
 MAX_DEPTH = 32
@@ -177,7 +182,7 @@ class TestCaseModuleService:
     # ---------- 写操作 ----------
 
     async def create_module(self, data: TestCaseModuleCreate) -> TestCaseModule:
-        await self._ensure_project_exists(data.project_id)
+        project = await self._ensure_project_exists(data.project_id)
         name = (data.name or "").strip()
         code = (data.code or "").strip()
         self._validate_name(name)
@@ -200,7 +205,15 @@ class TestCaseModuleService:
             description=data.description,
             sort=data.sort or 0,
         )
-        return await self.repo.create(node)
+        created = await self.repo.create(node)
+        # 新建模块本身不落盘（此刻无法判断它是否还会有子模块）；
+        # 但其父节点从此确定是分组目录，需要对父节点做磁盘形态对齐
+        if created.parent_id is not None:
+            parent = await self.get_module(created.parent_id)
+            await self._align_disk_entity(
+                project, await self.get_module_path(parent), has_children=True
+            )
+        return created
 
     async def update_module(
         self, module_id: int, data: TestCaseModuleUpdate
@@ -219,6 +232,7 @@ class TestCaseModuleService:
         _, _, children_map = build_index(nodes)
         is_leaf = not children_map.get(node.id)
 
+        moved_parent: TestCaseModule | None = None
         if new_parent_id != node.parent_id and new_parent_id is not None:
             parent = next((n for n in nodes if n.id == new_parent_id), None)
             if parent is None:
@@ -228,6 +242,7 @@ class TestCaseModuleService:
             if new_parent_id in collect_subtree_ids(children_map, node.id):
                 raise BadRequestException("不能移动到自身的子模块下")
             await self._ensure_parent_can_group(parent.id)
+            moved_parent = parent
 
         # 末级且已挂用例的模块，code 必须仍是合法的 pytest 文件名
         case_count = await self.repo.count_cases(node.id)
@@ -254,6 +269,12 @@ class TestCaseModuleService:
 
         if path_changed or name_changed:
             await self._resync_subtree_cases(node)
+        # 移入新父节点后，新父节点由末级变为分组目录，需要对它做磁盘形态对齐
+        if moved_parent is not None:
+            project = await self.project_repo.get_by_id(node.project_id)
+            await self._align_disk_entity(
+                project, await self.get_module_path(moved_parent), has_children=True
+            )
         return node
 
     async def delete_module(self, module_id: int) -> None:
@@ -264,7 +285,55 @@ class TestCaseModuleService:
         case_count = await self.repo.count_cases(node.id)
         if case_count:
             raise ConflictException(f"该模块下还有 {case_count} 条用例，请先移走用例")
+        # 删除前一并清理磁盘上的自动化代码（文件或目录），路径需在删除前推导
+        module_path = await self.get_module_path(node)
+        parent_id = node.parent_id
+        project = await self.project_repo.get_by_id(node.project_id)
         await self.repo.delete(node.id)
+        await self._remove_auto_code(project, module_path)
+        # 父节点可能因最后一个子模块被删除而由分组变为末级，需要重新对齐磁盘形态
+        if parent_id is not None:
+            await self._align_parent_disk_entity(project, parent_id)
+
+    async def _align_parent_disk_entity(self, project: Project | None, parent_id: int) -> None:
+        """删除子模块后，按父节点当前的末级状态对齐其磁盘形态"""
+        parent = await self.repo.get_by_id(parent_id)
+        if not parent:
+            return
+        has_children = bool(await self.repo.count_children(parent.id))
+        await self._align_disk_entity(
+            project, await self.get_module_path(parent), has_children=has_children
+        )
+
+    async def _align_disk_entity(
+        self, project: Project | None, module_path: str, has_children: bool
+    ) -> None:
+        """把模块的磁盘实体对齐为与其末级状态一致的形态（未配置根路径时跳过）
+
+        仅清理空目录与纯自动生成内容的文件；磁盘冲突只记录告警，不影响数据库操作。
+        """
+        if not project or not project.auto_root_path or not module_path:
+            return
+        ok, msg = align_module_disk_entity(
+            project.auto_root_path, module_path, has_children
+        )
+        if not ok:
+            logger.warning(f"[自动化代码对齐] 项目 {project.id} 模块 {module_path}: {msg}")
+        elif msg:
+            logger.info(f"[自动化代码对齐] 项目 {project.id} 模块 {module_path}: {msg}")
+
+    async def _remove_auto_code(self, project: Project | None, module_path: str) -> None:
+        """删除模块后清理对应的自动化代码（未配置根路径时跳过）
+
+        文件清理为尽力而为：失败只记录日志，不影响模块删除结果。
+        """
+        if not project or not project.auto_root_path or not module_path:
+            return
+        ok, msg = remove_automation_module(project.auto_root_path, module_path)
+        if not ok:
+            logger.warning(f"[自动化代码清理] 项目 {project.id} 模块 {module_path}: {msg}")
+        elif msg:
+            logger.info(f"[自动化代码清理] 项目 {project.id} 模块 {module_path}: {msg}")
 
     async def _resync_subtree_cases(self, root: TestCaseModule) -> int:
         """模块改名/移动后重算子树下所有用例的 module 与 module_code

@@ -18,6 +18,9 @@
           @change="loadData"
         />
         <a-button @click="handleReset">重置</a-button>
+        <a-button @click="handleDownloadTemplate" :loading="templateLoading" v-permission="'project:template'">
+          <DownloadOutlined /> 自动化模版下载
+        </a-button>
         <a-button type="primary" @click="showModal()" v-permission="'project:create'">
           <PlusOutlined /> 新增项目
         </a-button>
@@ -198,7 +201,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { message } from 'ant-design-vue'
-import { PlusOutlined, InboxOutlined } from '@ant-design/icons-vue'
+import { PlusOutlined, InboxOutlined, DownloadOutlined } from '@ant-design/icons-vue'
 import {
   getProjects,
   createProject,
@@ -206,7 +209,8 @@ import {
   deleteProject,
   getOwnerOptions,
   uploadProjectCode,
-  reinstallProjectCodeDeps
+  reinstallProjectCodeDeps,
+  downloadProjectCodeTemplate
 } from '@/api/project'
 import { getPythonEnvOptions } from '@/api/pythonEnv'
 import dayjs from 'dayjs'
@@ -417,6 +421,31 @@ async function handleReinstall(record) {
   await reinstallProjectCodeDeps(record.id)
   message.success('依赖重装任务已提交，请稍后刷新查看结果')
   loadData()
+}
+
+// 下载服务端保存的项目自动化模版压缩包（.zip，内容为 base64）
+const templateLoading = ref(false)
+
+async function handleDownloadTemplate() {
+  if (templateLoading.value) return
+  templateLoading.value = true
+  try {
+    const res = await downloadProjectCodeTemplate()
+    const data = res.data || {}
+    const binary = atob(data.content || '')
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    const blob = new Blob([bytes], { type: 'application/zip' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = data.filename || 'project_template.zip'
+    link.click()
+    URL.revokeObjectURL(link.href)
+  } catch (e) {
+    // 错误已由拦截器提示
+  } finally {
+    templateLoading.value = false
+  }
 }
 
 // 列表中存在进行中的任务时，每 5s 轮询一次（页面隐藏时暂停）

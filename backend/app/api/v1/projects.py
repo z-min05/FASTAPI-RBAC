@@ -51,6 +51,16 @@ async def get_owner_options(
     return Response.success(data=await service.get_owner_candidates())
 
 
+@router.get("/code-template", summary="下载项目自动化模版(zip)")
+async def download_project_code_template(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permissions_any("project:template")),
+):
+    service = ProjectInitService(db)
+    data = await service.get_code_template()
+    return Response.success(data=data)
+
+
 @router.get("/{project_id}", summary="项目详情")
 async def get_project(
     project_id: int,

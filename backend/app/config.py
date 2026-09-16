@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     PROJECT_CODE_INIT_TIMEOUT: int = 1800
     # 上传临时目录；为空则使用系统临时目录
     PROJECT_CODE_TMP_DIR: str = ""
+    # 项目自动化模版压缩包（zip）绝对路径，供项目管理页「自动化模版下载」按钮下载；
+    # 为空视为未配置，点击下载时直接报错
+    PROJECT_CODE_TEMPLATE_ZIP: str = ""
 
     # ==================== 加密（api_key 敏感字段） ====================
     # 用于 Fernet 对称加密；生产环境务必更换为随机 base64 字符串（32 bytes url-safe base64）。
