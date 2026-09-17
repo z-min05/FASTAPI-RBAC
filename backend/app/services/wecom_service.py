@@ -3,7 +3,6 @@
 - 发送走 httpx（异步），失败仅记录日志，不阻塞/不重试（用"发送测试消息"验证配置）
 - webhook_url 含敏感 key 参数，对外一律脱敏；secret 使用 Fernet 加密存储
 """
-import asyncio
 import base64
 import hashlib
 import hmac
@@ -28,12 +27,13 @@ from app.models.testcase import TestCase
 from app.models.user import User
 from app.utils.logger import logger
 
-# 企业微信群机器人 text 单条上限（官方 2048 字节）
-MAX_TEXT_BYTES = 2048
 # 企业微信群机器人 markdown 单条上限（保守取整）
 MAX_MESSAGE_BYTES = 4000
-# 限频：每分钟 ≤ 20 条 → 条间最小间隔（秒）
-RATE_LIMIT_INTERVAL = 3.0
+# 企业微信文件消息大小限制：5 字节 ~ 20MB
+MIN_FILE_BYTES = 5
+MAX_FILE_BYTES = 20 * 1024 * 1024
+# 文件名中不允许出现的字符
+_UNSAFE_FILENAME_CHARS = '\\/:*?"<>|\r\n\t'
 # 失败/阻塞明细最多列出条数
 MAX_FAILURE_ITEMS = 10
 # 标题/描述截断长度
@@ -73,13 +73,34 @@ def _sign(timestamp: str, secret: str) -> str:
     return urllib.parse.quote_plus(base64.b64encode(digest))
 
 
+def _signed_url(url: str, secret: str | None) -> str:
+    """配置加签密钥时，在 url 上追加 timestamp & sign 参数"""
+    if not secret:
+        return url
+    ts = str(int(time.time()))
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}timestamp={ts}&sign={_sign(ts, secret)}"
+
+
+def _upload_media_url(webhook_url: str, secret: str | None) -> str:
+    """由发送 webhook 推导素材上传地址（/webhook/send → /webhook/upload_media）"""
+    parts = urllib.parse.urlsplit(webhook_url)
+    path = parts.path
+    if path.endswith("/send"):
+        path = path[: -len("/send")] + "/upload_media"
+    else:
+        path = path.rstrip("/") + "/upload_media"
+    query = dict(urllib.parse.parse_qsl(parts.query))
+    query["type"] = "file"
+    url = urllib.parse.urlunsplit(
+        (parts.scheme, parts.netloc, path, urllib.parse.urlencode(query), "")
+    )
+    return _signed_url(url, secret)
+
+
 async def send_markdown(webhook_url: str, secret: str | None, content: str) -> tuple[bool, str]:
     """发送 markdown 消息到企业微信群机器人，返回 (是否成功, 错误信息/ok)"""
-    url = webhook_url
-    if secret:
-        ts = str(int(time.time()))
-        sep = "&" if "?" in webhook_url else "?"
-        url = f"{webhook_url}{sep}timestamp={ts}&sign={_sign(ts, secret)}"
+    url = _signed_url(webhook_url, secret)
     payload = {"msgtype": "markdown", "markdown": {"content": content}}
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -94,17 +115,34 @@ async def send_markdown(webhook_url: str, secret: str | None, content: str) -> t
     return True, "ok"
 
 
-async def send_text(webhook_url: str, secret: str | None, content: str) -> tuple[bool, str]:
-    """发送 text 消息到企业微信群机器人（单条 ≤ 2048 字节），返回 (是否成功, 错误/ok)"""
-    url = webhook_url
-    if secret:
-        ts = str(int(time.time()))
-        sep = "&" if "?" in webhook_url else "?"
-        url = f"{webhook_url}{sep}timestamp={ts}&sign={_sign(ts, secret)}"
-    safe = _truncate_bytes(content, MAX_TEXT_BYTES)
-    payload = {"msgtype": "text", "text": {"content": safe}}
+async def upload_media(webhook_url: str, secret: str | None, filename: str, content: bytes) -> tuple[str | None, str]:
+    """上传文件素材到企业微信群机器人，返回 (media_id, 错误/ok)；media_id 3 天内有效"""
+    url = _upload_media_url(webhook_url, secret)
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                url,
+                files={"media": (filename, content, "text/markdown")},
+            )
+        if resp.status_code != 200:
+            return None, f"HTTP {resp.status_code}"
+        data = resp.json()
+    except Exception as e:
+        return None, f"请求异常: {e}"
+    if data.get("errcode") != 0:
+        return None, f"企业微信错误 {data.get('errcode')}: {data.get('errmsg')}"
+    media_id = data.get("media_id")
+    if not media_id:
+        return None, "企业微信未返回 media_id"
+    return media_id, "ok"
+
+
+async def send_file_by_media(webhook_url: str, secret: str | None, media_id: str) -> tuple[bool, str]:
+    """按 media_id 发送 file 消息，返回 (是否成功, 错误/ok)"""
+    url = _signed_url(webhook_url, secret)
+    payload = {"msgtype": "file", "file": {"media_id": media_id}}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(url, json=payload)
         if resp.status_code != 200:
             return False, f"HTTP {resp.status_code}"
@@ -116,66 +154,10 @@ async def send_text(webhook_url: str, secret: str | None, content: str) -> tuple
     return True, "ok"
 
 
-def _split_long_line(line: str, max_bytes: int) -> list[str]:
-    """字节安全切分超长单行：不拆断 UTF-8 多字节字符，返回多段"""
-    pieces = []
-    raw = line.encode("utf-8")
-    start, n = 0, len(raw)
-    while start < n:
-        end = min(start + max_bytes, n)
-        while end > start:
-            try:
-                raw[start:end].decode("utf-8")
-                break
-            except UnicodeDecodeError:
-                end -= 1
-        pieces.append(raw[start:end].decode("utf-8"))
-        start = end
-    return pieces
-
-
-def _split_by_bytes(text: str, max_bytes: int) -> list[str]:
-    """按 max_bytes 字节上限把 text 切为多条，尽量在换行处断开；内容完整保留"""
-    chunks: list[str] = []
-    buf = ""
-    for line in text.split("\n"):
-        if len(line.encode("utf-8")) <= max_bytes:
-            candidate = f"{buf}\n{line}" if buf else line
-            if len(candidate.encode("utf-8")) <= max_bytes:
-                buf = candidate
-            else:
-                if buf:
-                    chunks.append(buf)
-                buf = line
-        else:
-            if buf:
-                chunks.append(buf)
-                buf = ""
-            chunks.extend(_split_long_line(line, max_bytes))
-    if buf:
-        chunks.append(buf)
-    return chunks
-
-
-async def send_multipart_text(
-    webhook_url: str, secret: str | None, content: str
-) -> tuple[int, list[str]]:
-    """把 AI 汇总文本分片（≤2048 字节/条）发送，并遵守每分钟 ≤ 20 条限频。
-
-    返回 (成功条数, 错误列表)。分片内容完整保留，不做丢弃。
-    """
-    parts = _split_by_bytes(content, MAX_TEXT_BYTES)
-    ok_count = 0
-    errors: list[str] = []
-    for i, part in enumerate(parts):
-        ok, err = await send_text(webhook_url, secret, part)
-        if ok:
-            ok_count += 1
-        else:
-            errors.append(err)
-        if i < len(parts) - 1:
-            await asyncio.sleep(RATE_LIMIT_INTERVAL)
-    return ok_count, errors
+def _safe_filename(name: str, max_len: int = 80) -> str:
+    """文件名清洗：替换路径/特殊字符，并限制长度"""
+    cleaned = "".join("_" if c in _UNSAFE_FILENAME_CHARS else c for c in name).strip().strip(".")
+    return (cleaned or "report")[:max_len]
 
 
 def _truncate_bytes(text: str, max_bytes: int = MAX_MESSAGE_BYTES) -> str:
@@ -186,13 +168,37 @@ def _truncate_bytes(text: str, max_bytes: int = MAX_MESSAGE_BYTES) -> str:
     return raw[:max_bytes].decode("utf-8", errors="ignore")
 
 
+async def send_markdown_file(
+    webhook_url: str, secret: str | None, filename: str, content: str
+) -> tuple[bool, str]:
+    """把内容写为 .md 文件推送到企业微信群机器人（先上传素材再发 file 消息）。
+
+    文件大小需在 5 字节 ~ 20MB 之间；超限时按字节截断并在文末标注。
+    """
+    body = content
+    raw = body.encode("utf-8")
+    if len(raw) > MAX_FILE_BYTES:
+        suffix = "\n\n> 内容超过 20MB，已截断。\n"
+        limit = MAX_FILE_BYTES - len(suffix.encode("utf-8"))
+        body = _truncate_bytes(body, limit) + suffix
+        raw = body.encode("utf-8")
+        logger.warning(f"企业微信推送文件超过 20MB，已截断至 {len(raw)} 字节")
+    if len(raw) < MIN_FILE_BYTES:
+        return False, "文件内容为空（企业微信要求文件不小于 5 字节）"
+
+    media_id, err = await upload_media(webhook_url, secret, _safe_filename(filename), raw)
+    if not media_id:
+        return False, f"素材上传失败: {err}"
+    return await send_file_by_media(webhook_url, secret, media_id)
+
+
 def _user_label(u: User | None) -> str:
     if not u:
         return "-"
     return u.nickname or u.username
 
 
-def _build_notify_message(
+def _build_report_markdown(
     *,
     plan_name: str,
     project_name: str,
@@ -208,7 +214,12 @@ def _build_notify_message(
     interrupted: int,
     failures: list[tuple[str, str, str]],  # (result 标签, 标题, 描述)
     plan_id: int,
+    ai_reply: str | None = None,
 ) -> str:
+    """组装测试结果为 markdown 报告（用于推送 .md 文件）。
+
+    有 AI 汇总时正文替换为 AI 分析，执行统计等元信息仍然保留。
+    """
     seconds = max(0, int((finished_at - started_at).total_seconds()))
     duration = f"{seconds // 60} 分 {seconds % 60} 秒"
     fmt = "%Y-%m-%d %H:%M:%S"
@@ -216,35 +227,45 @@ def _build_notify_message(
     rate = f"{passed / denom * 100:.2f}%" if denom else "-"
 
     lines = [
-        f"**测试结果通知**",
+        "# 测试结果报告",
         "",
-        f"测试计划：{plan_name}",
-        f"所属项目：{project_name}",
-        f"触发方式：{trigger_label}",
-        f"发起人：{operator}",
-        f"执行时间：{started_at.strftime(fmt)} ~ {finished_at.strftime(fmt)}（耗时 {duration}）",
+        f"- 测试计划：{plan_name}",
+        f"- 所属项目：{project_name}",
+        f"- 触发方式：{trigger_label}",
+        f"- 发起人：{operator}",
+        f"- 执行时间：{started_at.strftime(fmt)} ~ {finished_at.strftime(fmt)}（耗时 {duration}）",
         "",
-        f"**执行统计**（用例 {total} 条）",
-        f"通过：<font color=\"info\">{passed}</font>",
-        f"失败：<font color=\"warning\">{failed}</font>",
-        f"阻塞：<font color=\"warning\">{blocked}</font>",
-        f"跳过：{skipped} ｜ 中断：{interrupted}",
+        "## 执行统计",
+        "",
+        f"| 结果 | 数量 |",
+        f"| --- | --- |",
+        f"| 通过 | {passed} |",
+        f"| 失败 | {failed} |",
+        f"| 阻塞 | {blocked} |",
+        f"| 跳过 | {skipped} |",
+        f"| 中断 | {interrupted} |",
+        f"| 合计 | {total} |",
+        "",
         f"**通过率：{rate}**",
     ]
-    if failures:
+
+    if ai_reply:
+        lines += ["", "## AI 分析", "", ai_reply]
+    else:
         lines.append("")
-        lines.append("失败/阻塞明细：")
-        for i, (label, title, desc) in enumerate(failures, start=1):
-            if desc:
-                lines.append(f"{i}. [{label}] {title} —— {desc}")
-            else:
-                lines.append(f"{i}. [{label}] {title}")
+        lines.append("## 失败/阻塞明细")
+        lines.append("")
+        if failures:
+            for i, (label, title, desc) in enumerate(failures, start=1):
+                lines.append(f"{i}. **[{label}]** {title}" + (f" —— {desc}" if desc else ""))
+        else:
+            lines.append("无")
+
     base_url = (settings.NOTIFY_FRONTEND_URL or "").rstrip("/")
     if base_url:
-        lines.append("")
-        lines.append(f"查看完整报告：{base_url}/test/plans/{plan_id}")
+        lines += ["", "## 完整报告", "", f"{base_url}/test/plans/{plan_id}"]
 
-    return _truncate_bytes("\n".join(lines))
+    return "\n".join(lines)
 
 
 def _to_response(r: WecomRobot) -> dict:
@@ -421,8 +442,9 @@ async def notify_plan_finished(
     started_at: datetime,
     finished_at: datetime,
 ) -> None:
-    """计划整轮执行（批量/定时）结束后，向绑定机器人推送本轮统计。
+    """计划整轮执行（批量/定时）结束后，把本轮测试结果整理为 .md 文件推送给绑定机器人。
 
+    AI 汇总成功时文件正文为 AI 分析，否则为执行统计与失败明细。
     旁路通知：读取失败/发送失败均只记录日志，不影响执行主流程。
     """
     from app.db.session import AsyncSessionLocal
@@ -506,40 +528,37 @@ async def notify_plan_finished(
                     await db.rollback()
                     logger.warning(f"计划 {plan_id} 汇总对话落库失败，已回滚", exc_info=True)
 
-            content = None
-            if not ai_reply:
-                content = _build_notify_message(
-                    plan_name=plan.name,
-                    project_name=project_name,
-                    trigger_label=trigger_label,
-                    operator=operator,
-                    started_at=started_at,
-                    finished_at=finished_at,
-                    total=len(rows),
-                    passed=stat["pass"],
-                    failed=stat["fail"],
-                    blocked=stat["blocked"],
-                    skipped=stat["skipped"],
-                    interrupted=stat["interrupted"],
-                    failures=failures,
-                    plan_id=plan.id,
-                )
+            report = _build_report_markdown(
+                plan_name=plan.name,
+                project_name=project_name,
+                trigger_label=trigger_label,
+                operator=operator,
+                started_at=started_at,
+                finished_at=finished_at,
+                total=len(rows),
+                passed=stat["pass"],
+                failed=stat["fail"],
+                blocked=stat["blocked"],
+                skipped=stat["skipped"],
+                interrupted=stat["interrupted"],
+                failures=failures,
+                plan_id=plan.id,
+                ai_reply=ai_reply,
+            )
+            filename = f"测试结果-{plan.name}-{finished_at.strftime('%Y%m%d%H%M%S')}.md"
 
-        # 逐机器人发送（会话已关闭，发送阶段不再依赖 DB；AI 文本走分片+限频，统计走单条 markdown）
+        # 逐机器人发送（会话已关闭，发送阶段不再依赖 DB；报告整理为 .md 文件推送）
         logger.info(
             f"计划 {plan_id} 企业微信通知发送开始：{len(robots)} 个机器人，"
             f"用例 {len(rows)}（通过 {stat['pass']}/失败 {stat['fail']}/阻塞 {stat['blocked']}/跳过 {stat['skipped']}）"
             + ("" if ai_reply else "，AI 汇总失败/未配置，回退统计")
+            + f"，文件 {filename}（{len(report.encode('utf-8'))} 字节）"
         )
         for robot in robots:
-            secret = decrypt(robot.secret)
-            if ai_reply:
-                ok_count, errors = await send_multipart_text(robot.webhook_url, secret, ai_reply)
-                if not ok_count:
-                    logger.error(f"企业微信群机器人「{robot.name}」(id={robot.id}) AI 推送全失败: {errors}")
-            else:
-                ok, err = await send_markdown(robot.webhook_url, secret, content)
-                if not ok:
-                    logger.error(f"企业微信群机器人「{robot.name}」(id={robot.id}) 推送失败: {err}")
+            ok, err = await send_markdown_file(
+                robot.webhook_url, decrypt(robot.secret), filename, report
+            )
+            if not ok:
+                logger.error(f"企业微信群机器人「{robot.name}」(id={robot.id}) 文件推送失败: {err}")
     except Exception as e:  # 通知属旁路，任何异常不得向上抛出
         logger.error(f"计划 {plan_id} 测试结果通知发送异常: {e}")
