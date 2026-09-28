@@ -31,7 +31,12 @@ from app.schemas.plan import (
     PlanScheduleResponse,
     PlanScheduleUpdate,
 )
-from app.services.auto_exec_service import _execute_cases_sequential, _running_tasks
+from app.services.auto_exec_service import (
+    _execute_cases_sequential,
+    _running_tasks,
+    find_running_case_titles,
+    format_conflict_titles,
+)
 from app.utils.logger import logger
 
 
@@ -151,25 +156,10 @@ async def trigger_schedule(schedule_id: int, *, manual: bool = False) -> None:
             s.last_skip_reason = "检测到上次执行异常中断，已自动复位"
             await db.commit()
 
-        # 忙碌检测：任务自身运行中，或该计划存在执行中的用例（手动/上轮未结束）
-        plan_busy = bool(
-            (
-                await db.execute(
-                    select(func.count())
-                    .select_from(PlanTestCase)
-                    .where(
-                        PlanTestCase.plan_id == s.plan_id,
-                        PlanTestCase.result == "running",
-                    )
-                )
-            ).scalar_one()
-        )
-        busy_reason = ""
+        # 忙碌检测：仅任务自身上一轮未结束视为繁忙
+        # （用例级冲突需知道本轮范围，放到执行上下文组装之后检测）
         if s.is_running:
             busy_reason = "上一轮定时执行尚未结束"
-        elif plan_busy:
-            busy_reason = "该计划当前有执行在跑（手动或上一轮定时）"
-        if busy_reason:
             if manual:
                 raise BadRequestException(f"任务繁忙：{busy_reason}，请稍后再试")
             await _mark_skip(db, s, busy_reason)
@@ -187,6 +177,15 @@ async def trigger_schedule(schedule_id: int, *, manual: bool = False) -> None:
             reason = "没有可自动执行的用例（需配置模块编码/用例编码）"
             if manual:
                 raise BadRequestException(reason)
+            await _mark_skip(db, s, reason)
+            return
+
+        # 执行冲突检测：本轮任用例在任意计划中正在执行时，跳过本轮
+        conflicts = await find_running_case_titles(db, [e[1] for e in entries])
+        if conflicts:
+            reason = f"存在执行中的用例：{format_conflict_titles(conflicts)}"
+            if manual:
+                raise BadRequestException(f"任务繁忙：{reason}，请稍后再试")
             await _mark_skip(db, s, reason)
             return
 

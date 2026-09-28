@@ -27,7 +27,11 @@ from app.schemas.plan import (
 from app.core.pagination import PaginationParams, PaginatedResponse
 from app.exceptions import NotFoundException, BadRequestException
 from app.dependency import actor_user_id
-from app.services.auto_exec_service import execute_testcase_background
+from app.services.auto_exec_service import (
+    execute_testcase_background,
+    find_running_case_titles,
+    format_conflict_titles,
+)
 from app.models.case_execution_log import CaseExecutionLog
 from app.db.session import AsyncSessionLocal
 
@@ -497,6 +501,13 @@ class PlanService:
         if not tc.module_code or not tc.case_code:
             raise BadRequestException("该用例未配置模块编码或用例编码，无法自动化执行")
 
+        # 执行冲突检测：该用例在任意计划中正在执行时，不允许重复执行
+        conflicts = await find_running_case_titles(self.db, [tc.id])
+        if conflicts:
+            raise BadRequestException(
+                f"存在执行中的用例，无法执行：{format_conflict_titles(conflicts)}"
+            )
+
         project = await self.project_repo.get_by_id(plan.project_id)
         if not project:
             raise NotFoundException("所属项目不存在")
@@ -565,6 +576,13 @@ class PlanService:
                 raise BadRequestException(f"用例「{tc.title}」未配置模块编码或用例编码")
             test_file = os.path.join(project.auto_root_path, f"{tc.module_code}.py")
             entries.append((ptc_id, tc.id, test_file, tc.case_code))
+
+        # 执行冲突检测：本轮任用例在任意计划中正在执行时，整批不允许执行
+        conflicts = await find_running_case_titles(self.db, [e[1] for e in entries])
+        if conflicts:
+            raise BadRequestException(
+                f"存在执行中的用例，无法批量执行：{format_conflict_titles(conflicts)}"
+            )
 
         # 全部设为 running
         for ptc_id, _, _, _ in entries:

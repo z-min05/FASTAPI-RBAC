@@ -81,6 +81,49 @@ def _trim(s: str, n: int) -> str:
     return s if len(s) <= n else s[:n] + "..."
 
 
+# ---------- 执行冲突检测 ----------
+
+async def find_running_case_titles(db, testcase_ids: list[int]) -> list[str]:
+    """查询给定底层用例中正在执行中的用例标题（跨计划比对）。
+
+    判定口径：只要某条用例（testcase_id）在任意计划里存在 result=running 的
+    计划用例行，即视为执行中，与是否同属一个计划无关。
+    """
+    from sqlalchemy import select
+    from app.models.plan_testcase import PlanTestCase
+    from app.models.testcase import TestCase
+
+    ids = list({i for i in testcase_ids if i})
+    if not ids:
+        return []
+    rows = (
+        await db.execute(
+            select(TestCase.id, TestCase.title)
+            .join(PlanTestCase, PlanTestCase.testcase_id == TestCase.id)
+            .where(
+                PlanTestCase.testcase_id.in_(ids),
+                PlanTestCase.result == "running",
+            )
+        )
+    ).all()
+    titles: list[str] = []
+    seen: set[int] = set()
+    for tc_id, title in rows:
+        if tc_id in seen:
+            continue
+        seen.add(tc_id)
+        titles.append(title)
+    return titles
+
+
+def format_conflict_titles(titles: list[str], limit: int = 5) -> str:
+    """拼接冲突用例标题，过长时截断，避免提示信息过长"""
+    shown = "、".join(titles[:limit])
+    if len(titles) > limit:
+        shown += f" 等 {len(titles)} 条"
+    return shown
+
+
 # ---------- 执行 ----------
 
 async def _run_pytest_async(
