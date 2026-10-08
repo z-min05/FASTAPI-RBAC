@@ -30,7 +30,8 @@
       :pagination="pagination"
       @change="handleTableChange"
       row-key="id"
-      :scroll="{ x: 1300 }"
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'method'">
@@ -98,6 +99,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { getLogs } from '@/api/log'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
 const loading = ref(false)

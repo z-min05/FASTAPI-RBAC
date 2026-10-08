@@ -22,6 +22,8 @@
       :pagination="pagination"
       @change="handleTableChange"
       row-key="id"
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'is_active'">
@@ -108,6 +110,7 @@ import { PlusOutlined } from '@ant-design/icons-vue'
 import { getUsers, getUser, createUser, updateUser, deleteUser } from '@/api/user'
 import { getRoles } from '@/api/role'
 import { getDepartmentTree } from '@/api/department'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
 const loading = ref(false)
@@ -123,9 +126,9 @@ const deptFlatMap = ref({})
 
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
-  { title: '用户名', dataIndex: 'username', key: 'username' },
-  { title: '邮箱', dataIndex: 'email', key: 'email' },
-  { title: '昵称', dataIndex: 'nickname', key: 'nickname' },
+  { title: '用户名', dataIndex: 'username', key: 'username', width: 150, ellipsis: true },
+  { title: '邮箱', dataIndex: 'email', key: 'email', width: 200, ellipsis: true },
+  { title: '昵称', dataIndex: 'nickname', key: 'nickname', width: 150, ellipsis: true },
   { title: '部门', dataIndex: 'department_id', key: 'department_id', width: 120 },
   { title: '角色', key: 'roles', width: 160 },
   { title: '状态', dataIndex: 'is_active', key: 'is_active', width: 80 },

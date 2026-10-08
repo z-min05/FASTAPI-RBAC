@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     # 部分用例（如 OTA 升级、组网、长距离测试）耗时远超 120s，可按需调大
     EXEC_TIMEOUT_SECONDS: int = 120
 
+    # ==================== 自动化测试环境管理 ====================
+    # 环境文件（{项目根}/.env 与 {项目根}/.envs/<name>.env）单个大小上限（KB）
+    PROJECT_ENV_MAX_KB: int = 256
+    # 切换/保存生效环境前，把旧 .env 备份到 {项目根}/.envs/.backup/ 的保留份数
+    PROJECT_ENV_BACKUP_KEEP: int = 20
+
     # ==================== 企业微信机器人通知 ====================
     # 推送消息中"查看完整报告"链接的前缀（如 http://127.0.0.1:8080），为空则不附加链接
     NOTIFY_FRONTEND_URL: str | None = None

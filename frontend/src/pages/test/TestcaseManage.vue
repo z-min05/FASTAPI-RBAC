@@ -72,6 +72,8 @@
           :row-selection="{ selectedRowKeys, onChange: onSelectChange }"
           @change="handleTableChange"
           row-key="id"
+          :scroll="TABLE_SCROLL_TALL(columns)"
+          table-layout="fixed"
         >
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'project'">
@@ -241,6 +243,7 @@ import {
 import { getModuleTree } from '@/api/testcaseModule'
 import { getAllProjects } from '@/api/project'
 import TestcaseModuleTree from '@/components/TestcaseModuleTree.vue'
+import { TABLE_SCROLL_TALL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
 const loading = ref(false)
@@ -296,7 +299,7 @@ const order = ref('desc')
 
 const columns = computed(() => [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
-  { title: '标题', dataIndex: 'title', key: 'title', ellipsis: true },
+  { title: '标题', dataIndex: 'title', key: 'title', width: 320, ellipsis: true },
   { title: '项目', key: 'project', width: 120 },
   { title: '模块', dataIndex: 'module', key: 'module', width: 110 },
   { title: '优先级', dataIndex: 'priority', key: 'priority', width: 80 },

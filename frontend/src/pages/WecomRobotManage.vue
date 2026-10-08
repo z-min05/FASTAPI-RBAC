@@ -35,6 +35,8 @@
       @change="handleTableChange"
       row-key="id"
       size="middle"
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'webhook'">
@@ -114,6 +116,7 @@ import {
   deleteWecomRobot,
   testWecomRobot
 } from '@/api/wecomRobot'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
 const loading = ref(false)
@@ -150,10 +153,10 @@ const formRules = {
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
   { title: '名称', dataIndex: 'name', key: 'name', width: 180, ellipsis: true },
-  { title: 'Webhook', key: 'webhook', ellipsis: true },
+  { title: 'Webhook', key: 'webhook', width: 260, ellipsis: true },
   { title: '加签', key: 'secret', width: 90 },
   { title: '状态', key: 'enabled', width: 80 },
-  { title: '备注', dataIndex: 'description', key: 'description', ellipsis: true },
+  { title: '备注', dataIndex: 'description', key: 'description', width: 160, ellipsis: true },
   { title: '创建时间', key: 'created_at', width: 160 },
   { title: '操作', key: 'action', width: 200, fixed: 'right' }
 ]

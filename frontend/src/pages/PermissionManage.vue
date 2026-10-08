@@ -22,6 +22,8 @@
       :pagination="pagination"
       @change="handleTableChange"
       row-key="id"
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'module'">
@@ -87,6 +89,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { getPermissions, createPermission, updatePermission, deletePermission } from '@/api/permission'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
 const loading = ref(false)
@@ -98,11 +101,11 @@ const editId = ref(null)
 
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
-  { title: '权限名称', dataIndex: 'name', key: 'name' },
-  { title: '权限编码', dataIndex: 'code', key: 'code' },
+  { title: '权限名称', dataIndex: 'name', key: 'name', width: 160, ellipsis: true },
+  { title: '权限编码', dataIndex: 'code', key: 'code', width: 200, ellipsis: true },
   { title: '模块', dataIndex: 'module', key: 'module', width: 100 },
   { title: '操作', dataIndex: 'action', key: 'action_tag', width: 100 },
-  { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
+  { title: '描述', dataIndex: 'description', key: 'description', width: 220, ellipsis: true },
   { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180 },
   { title: '操作', key: 'action', width: 140, fixed: 'right' }
 ]

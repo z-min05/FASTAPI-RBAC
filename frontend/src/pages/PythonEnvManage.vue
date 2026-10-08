@@ -41,16 +41,21 @@
       @change="handleTableChange"
       row-key="id"
       size="middle"
-      :scroll="{ x: 1400 }"
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'env_path'">
-          <a-typography-text code class="path-text">{{ record.env_path }}</a-typography-text>
-          <a-button type="link" size="small" @click="copyText(record.env_path)">复制</a-button>
+          <div class="path-cell">
+            <a-typography-text code class="path-text" :title="record.env_path">{{ record.env_path }}</a-typography-text>
+            <a-button type="link" size="small" class="path-copy" @click="copyText(record.env_path)">复制</a-button>
+          </div>
         </template>
         <template v-if="column.key === 'python_path'">
-          <a-typography-text code class="path-text">{{ record.python_path }}</a-typography-text>
-          <a-button type="link" size="small" @click="copyText(record.python_path)">复制</a-button>
+          <div class="path-cell">
+            <a-typography-text code class="path-text" :title="record.python_path">{{ record.python_path }}</a-typography-text>
+            <a-button type="link" size="small" class="path-copy" @click="copyText(record.python_path)">复制</a-button>
+          </div>
         </template>
         <template v-if="column.key === 'status'">
           <a-tooltip>
@@ -176,6 +181,7 @@ import {
   syncPythonEnv,
   syncAllPythonEnvs
 } from '@/api/pythonEnv'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
 // 状态机展示映射（与后端 python_env_service.py 保持一致）
@@ -478,7 +484,22 @@ onBeforeUnmount(() => {
   color: #999;
   margin-top: 4px;
 }
+/* 环境路径 / 解释器路径：单行显示，超长截断（悬停看完整路径），不再换行撑高行高 */
+.path-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
 .path-text {
-  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.path-copy {
+  flex: none;
+  padding: 0;
 }
 </style>

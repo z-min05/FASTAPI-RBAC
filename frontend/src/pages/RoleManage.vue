@@ -22,6 +22,8 @@
       :pagination="pagination"
       @change="handleTableChange"
       row-key="id"
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'is_active'">
@@ -97,6 +99,7 @@ import { PlusOutlined } from '@ant-design/icons-vue'
 import { getRoles, getRole, createRole, updateRole, deleteRole } from '@/api/role'
 import { getPermissions } from '@/api/permission'
 import { getMenuTree } from '@/api/menu'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
 const loading = ref(false)
@@ -111,9 +114,9 @@ const menuTreeData = ref([])
 
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
-  { title: '角色名称', dataIndex: 'name', key: 'name' },
-  { title: '角色编码', dataIndex: 'code', key: 'code' },
-  { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
+  { title: '角色名称', dataIndex: 'name', key: 'name', width: 160, ellipsis: true },
+  { title: '角色编码', dataIndex: 'code', key: 'code', width: 180, ellipsis: true },
+  { title: '描述', dataIndex: 'description', key: 'description', width: 220, ellipsis: true },
   { title: '排序', dataIndex: 'sort', key: 'sort', width: 80 },
   { title: '状态', dataIndex: 'is_active', key: 'is_active', width: 80 },
   { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180 },

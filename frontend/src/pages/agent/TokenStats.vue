@@ -39,6 +39,8 @@
             :columns="modelColumns"
             :data-source="stats.summary.by_model"
             :pagination="false"
+            :scroll="modelScroll"
+            table-layout="fixed"
           />
         </div>
 
@@ -51,6 +53,8 @@
             :data-source="stats.recent?.items || []"
             :pagination="pagination"
             :loading="tableLoading"
+            :scroll="recentScroll"
+            table-layout="fixed"
             @change="handleTableChange"
           />
         </div>
@@ -62,9 +66,15 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ReloadOutlined } from '@ant-design/icons-vue'
 import { getAgentTokenStats } from '@/api/agent'
+import { sumColumnsWidth } from '@/utils/tableScroll'
+
+// 本页两张表与统计卡片同屏纵向排列，不按视口取高，用固定高度避免互相挤压
+// x 取列宽之和（不能用 max-content，否则长文本会把列撑开、截断失效）
+const modelScroll = computed(() => ({ x: sumColumnsWidth(modelColumns), y: 240 }))
+const recentScroll = computed(() => ({ x: sumColumnsWidth(recentColumns), y: 400 }))
 
 const loading = ref(false)      // 汇总 + 首屏加载
 const tableLoading = ref(false) // 翻页/改页大小时的局部加载
@@ -78,7 +88,7 @@ const pagination = reactive({
 })
 
 const modelColumns = [
-  { title: '模型', dataIndex: 'model' },
+  { title: '模型', dataIndex: 'model', width: 200, ellipsis: true },
   { title: '次数', dataIndex: 'call_count', width: 90 },
   { title: '输入', dataIndex: 'input', width: 100 },
   { title: '输出', dataIndex: 'output', width: 100 },
@@ -87,7 +97,7 @@ const modelColumns = [
 
 const recentColumns = [
   { title: '时间', dataIndex: 'created_at', width: 170, customRender: ({ text }) => formatTime(text, true) },
-  { title: '模型', dataIndex: 'model' },
+  { title: '模型', dataIndex: 'model', width: 200, ellipsis: true },
   { title: '轮次', dataIndex: 'step', width: 70 },
   { title: '输入', dataIndex: 'input_tokens', width: 90 },
   { title: '输出', dataIndex: 'output_tokens', width: 90 },

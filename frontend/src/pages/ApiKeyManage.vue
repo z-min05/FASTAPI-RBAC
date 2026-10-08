@@ -15,6 +15,8 @@
       :pagination="pagination"
       @change="handleTableChange"
       row-key="id"
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'key_prefix'">
@@ -110,6 +112,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { getApiKeys, getApiKeyRoles, createApiKey, updateApiKeyStatus, deleteApiKey, regenerateApiKey } from '@/api/api_key'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
 const loading = ref(false)
@@ -143,7 +146,7 @@ const formRules = {
 
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
-  { title: '名称', dataIndex: 'name', key: 'name', ellipsis: true },
+  { title: '名称', dataIndex: 'name', key: 'name', width: 160, ellipsis: true },
   { title: '密钥前缀', key: 'key_prefix', width: 180 },
   { title: '关联角色', key: 'role_id', width: 120 },
   { title: '过期时间', key: 'expires_at', width: 170 },

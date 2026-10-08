@@ -35,6 +35,8 @@
       :row-selection="{ selectedRowKeys, onChange: onSelectChange }"
       @change="handleTableChange"
       row-key="id"
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'is_active'">
@@ -75,6 +77,13 @@
               v-permission="'project:init'"
               @click="handleReinstall(record)"
             >重装依赖</a-button>
+            <a-button
+              type="link"
+              size="small"
+              v-permission="'project:env:list'"
+              :disabled="!record.auto_root_path"
+              @click="showEnvDrawer(record)"
+            >环境管理</a-button>
             <a-popconfirm
               title="打包并下载该项目的自动化代码（整个项目目录）？"
               @confirm="handleDownloadAutoCode(record)"
@@ -207,6 +216,8 @@
         <a @click="clearReinitFile">移除</a>
       </div>
     </a-modal>
+
+    <ProjectEnvDrawer v-model:open="envDrawerOpen" :project="envRecord" />
   </div>
 </template>
 
@@ -226,6 +237,8 @@ import {
   downloadProjectAutoCode
 } from '@/api/project'
 import { getPythonEnvOptions } from '@/api/pythonEnv'
+import ProjectEnvDrawer from '@/components/ProjectEnvDrawer.vue'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
 const loading = ref(false)
@@ -245,8 +258,8 @@ const statusOptions = [
 const columns = computed(() => [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
   { title: '编码', dataIndex: 'code', key: 'code', width: 120 },
-  { title: '名称', dataIndex: 'name', key: 'name' },
-  { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
+  { title: '名称', dataIndex: 'name', key: 'name', width: 180, ellipsis: true },
+  { title: '描述', dataIndex: 'description', key: 'description', width: 220, ellipsis: true },
   { title: '负责人', dataIndex: 'owner_id', key: 'owner', width: 120 },
   { title: '状态', dataIndex: 'is_active', key: 'is_active', width: 80 },
   { title: '代码初始化', dataIndex: 'code_init_status', key: 'code_init_status', width: 110 },
@@ -261,7 +274,7 @@ const columns = computed(() => [
   },
   { title: '自动化根路径', dataIndex: 'auto_root_path', key: 'auto_root_path', ellipsis: true, width: 200 },
   { title: 'Python 路径', dataIndex: 'python_path', key: 'python_path', ellipsis: true, width: 200 },
-  { title: '操作', key: 'action', width: 320, fixed: 'right' }
+  { title: '操作', key: 'action', width: 400, fixed: 'right' }
 ])
 
 const tableData = ref([])
@@ -489,6 +502,15 @@ async function handleDownloadAutoCode(record) {
   } finally {
     codeDownloadingId.value = null
   }
+}
+
+// ---------- 自动化测试环境管理 ----------
+const envDrawerOpen = ref(false)
+const envRecord = ref(null)
+
+function showEnvDrawer(record) {
+  envRecord.value = record
+  envDrawerOpen.value = true
 }
 
 // 列表中存在进行中的任务时，每 5s 轮询一次（页面隐藏时暂停）

@@ -8,6 +8,7 @@ from app.models.role_permission import role_permissions
 from app.models.role_menu import role_menus
 from app.models.operation_log import OperationLog
 from app.models.project import Project
+from app.models.project_env import ProjectEnv
 from app.models.testcase import TestCase
 from app.models.testcase_module import TestCaseModule
 from app.models.agent_conversation import AgentConversation
@@ -34,6 +35,7 @@ __all__ = [
     "role_menus",
     "OperationLog",
     "Project",
+    "ProjectEnv",
     "TestCase",
     "TestCaseModule",
     "TestPlan",

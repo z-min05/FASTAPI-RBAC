@@ -15,6 +15,8 @@
       :pagination="false"
       row-key="id"
       default-expand-all-rows
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'status'">
@@ -80,6 +82,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { getDepartmentTree, createDepartment, updateDepartment, deleteDepartment } from '@/api/department'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 
 const loading = ref(false)
 const submitLoading = ref(false)

@@ -15,6 +15,8 @@
       :pagination="false"
       row-key="id"
       default-expand-all-rows
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'menu_type'">
@@ -100,6 +102,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { getMenuTree, createMenu, updateMenu, deleteMenu } from '@/api/menu'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 
 const loading = ref(false)
 const submitLoading = ref(false)
@@ -112,9 +115,9 @@ const columns = [
   { title: '菜单名称', dataIndex: 'name', key: 'name', width: 180 },
   { title: '类型', dataIndex: 'menu_type', key: 'menu_type', width: 80 },
   { title: '图标', dataIndex: 'icon', key: 'icon', width: 120 },
-  { title: '路由路径', dataIndex: 'path', key: 'path' },
-  { title: '组件路径', dataIndex: 'component', key: 'component' },
-  { title: '权限标识', dataIndex: 'permission', key: 'permission' },
+  { title: '路由路径', dataIndex: 'path', key: 'path', width: 180, ellipsis: true },
+  { title: '组件路径', dataIndex: 'component', key: 'component', width: 220, ellipsis: true },
+  { title: '权限标识', dataIndex: 'permission', key: 'permission', width: 180, ellipsis: true },
   { title: '排序', dataIndex: 'sort', key: 'sort', width: 70 },
   { title: '可见', dataIndex: 'visible', key: 'visible', width: 70 },
   { title: '操作', key: 'action', width: 200, fixed: 'right' }

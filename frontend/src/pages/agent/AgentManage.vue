@@ -33,7 +33,8 @@
       :pagination="pagination"
       @change="handleTableChange"
       row-key="id"
-      :scroll="{ x: 1000 }"
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'llm'">
@@ -143,6 +144,7 @@ import {
   listLlmConfigs,
   getAgentTools
 } from '@/api/agent'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 
 const authStore = useAuthStore()
 const isSuperuser = computed(() => !!authStore.userInfo?.is_superuser)
@@ -161,9 +163,9 @@ const toolList = ref([]) // [{ name, description }]
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
   { title: '名称', dataIndex: 'name', key: 'name', width: 130, ellipsis: true },
-  { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
+  { title: '描述', dataIndex: 'description', key: 'description', width: 200, ellipsis: true },
   { title: 'LLM', key: 'llm', width: 220 },
-  { title: '提示词', dataIndex: 'system_prompt', key: 'system_prompt', ellipsis: true },
+  { title: '提示词', dataIndex: 'system_prompt', key: 'system_prompt', width: 260, ellipsis: true },
   { title: '工具', key: 'tools', width: 220 },
   { title: '启用', key: 'enabled', width: 80 },
   { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 170 },

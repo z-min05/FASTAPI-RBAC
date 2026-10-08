@@ -42,6 +42,8 @@
       @change="handleTableChange"
       row-key="id"
       size="middle"
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'project'">
@@ -150,6 +152,7 @@ import { getPlans, createPlan, updatePlan, deletePlan } from '@/api/plan'
 import { getAllProjects } from '@/api/project'
 import { getRobotOptions } from '@/api/wecomRobot'
 import { listAgents } from '@/api/agent'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
 const router = useRouter()

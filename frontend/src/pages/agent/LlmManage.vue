@@ -31,7 +31,8 @@
       :pagination="pagination"
       @change="handleTableChange"
       row-key="id"
-      :scroll="{ x: 900 }"
+      :scroll="TABLE_SCROLL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'provider'">
@@ -121,6 +122,7 @@ import {
   updateLlmConfig,
   deleteLlmConfig
 } from '@/api/agent'
+import { TABLE_SCROLL } from '@/utils/tableScroll'
 
 const loading = ref(false)
 const submitLoading = ref(false)
@@ -154,7 +156,7 @@ const columns = [
   { title: '模型', dataIndex: 'model', key: 'model', width: 150, ellipsis: true },
   { title: 'API Key', dataIndex: 'api_key_mask', key: 'api_key_mask', width: 150 },
   { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 80 },
-  { title: '备注', dataIndex: 'remark', key: 'remark', ellipsis: true },
+  { title: '备注', dataIndex: 'remark', key: 'remark', width: 180, ellipsis: true },
   { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 170 },
   { title: '操作', key: 'action', width: 130, fixed: 'right' }
 ]

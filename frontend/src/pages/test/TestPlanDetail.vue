@@ -107,6 +107,8 @@
         preserveSelectedRowKeys: true,
         getCheckboxProps: r => ({ disabled: !isSelectable(r) })
       }"
+      :scroll="TABLE_SCROLL_TALL(columns)"
+      table-layout="fixed"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'priority'">
@@ -234,7 +236,8 @@
         }"
         row-key="id"
         size="small"
-        :scroll="{ y: 420 }"
+        :scroll="TABLE_SCROLL_MODAL(candidateColumns)"
+        table-layout="fixed"
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'priority'">
@@ -399,7 +402,8 @@
         :pagination="false"
         row-key="id"
         size="middle"
-        :scroll="{ x: 1000 }"
+        :scroll="TABLE_SCROLL_MODAL(scheduleColumns)"
+        table-layout="fixed"
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'name'">
@@ -556,6 +560,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { listAgents } from '@/api/agent'
 import { getRobotOptions } from '@/api/wecomRobot'
+import { TABLE_SCROLL_TALL, TABLE_SCROLL_MODAL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
 const route = useRoute()
@@ -771,13 +776,13 @@ const testerFilter = ref(null)
 const testerOptions = ref([])
 
 const columns = [
-  { title: '用例标题', dataIndex: 'title', key: 'title', ellipsis: true },
+  { title: '用例标题', dataIndex: 'title', key: 'title', width: 320, ellipsis: true },
   { title: '模块', dataIndex: 'module', key: 'module', width: 120, ellipsis: true },
   { title: '优先级', dataIndex: 'priority', key: 'priority', width: 80 },
   { title: '来源', dataIndex: 'source', key: 'source', width: 110, ellipsis: true },
   { title: '测试人', dataIndex: 'tester_name', key: 'tester', width: 120 },
   { title: '结果', dataIndex: 'result', key: 'result', width: 90 },
-  { title: '结果描述', dataIndex: 'result_desc', key: 'result_desc', width: 120, ellipsis: true },
+  { title: '结果描述', dataIndex: 'result_desc', key: 'result_desc', width: 200, ellipsis: true },
   { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 170 },
   { title: '操作', key: 'action', width: 320, fixed: 'right' }
 ]
@@ -865,7 +870,7 @@ const candidatePagination = reactive({
 
 const candidateColumns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
-  { title: '用例标题', dataIndex: 'title', key: 'title', ellipsis: true },
+  { title: '用例标题', dataIndex: 'title', key: 'title', width: 320, ellipsis: true },
   { title: '模块', dataIndex: 'module', key: 'module', width: 130, ellipsis: true },
   { title: '优先级', dataIndex: 'priority', key: 'priority', width: 80 },
   { title: '类型', dataIndex: 'case_type', key: 'case_type', width: 90 },
