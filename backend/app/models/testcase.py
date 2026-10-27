@@ -14,7 +14,7 @@ class TestCase(BaseModel):
     module: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
     priority: Mapped[str] = mapped_column(String(10), default="P1", nullable=False)
     case_type: Mapped[str] = mapped_column(String(30), default="function", nullable=False)
-    source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
     precondition: Mapped[str | None] = mapped_column(Text, nullable=True)
     steps: Mapped[str | None] = mapped_column(Text, nullable=True)
     expected_result: Mapped[str] = mapped_column(Text, nullable=False)

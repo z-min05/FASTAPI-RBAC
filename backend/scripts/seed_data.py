@@ -117,6 +117,7 @@ TEST_MENUS = [
                     {"name": "新建定时执行", "menu_type": "button", "permission": "plan:schedule:create", "sort": 9},
                     {"name": "编辑定时执行", "menu_type": "button", "permission": "plan:schedule:update", "sort": 10},
                     {"name": "删除定时执行", "menu_type": "button", "permission": "plan:schedule:delete", "sort": 11},
+                    {"name": "查看执行日志", "menu_type": "button", "permission": "plan:case:list", "sort": 12},
                 ],
             },
         ],
@@ -216,7 +217,10 @@ async def _ensure_test_module(db):
             )
             if not r.first():
                 await db.execute(role_menus.insert().values(role_id=admin_role.id, menu_id=m.id))
-        if user_role and m.menu_type != "button":
+        # user 角色默认只读：除菜单外，额外授予只读的「查看执行日志」按钮
+        if user_role and (
+            m.menu_type != "button" or m.permission == "plan:case:list"
+        ):
             r = await db.execute(
                 select(role_menus).where(role_menus.c.role_id == user_role.id, role_menus.c.menu_id == m.id)
             )

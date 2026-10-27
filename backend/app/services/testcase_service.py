@@ -480,15 +480,25 @@ class TestCaseService:
         failures = []
         for idx, record in enumerate(records, start=2):
             errors = []
+            title = record["标题"]
             project = code_to_project.get(record["项目编码"])
             if not project:
                 errors.append(f"项目编码不存在或已停用: {record['项目编码']}")
-            if not record["标题"]:
+            if not title:
                 errors.append("标题不能为空")
+            elif len(title) > 200:
+                errors.append("标题长度不能超过 200 个字符")
             if not record["模块路径"]:
                 errors.append("模块路径不能为空")
             if not record["预期结果"]:
                 errors.append("预期结果不能为空")
+
+            source = record["来源"] or None
+            if source and len(source) > 255:
+                errors.append("来源长度不能超过 255 个字符")
+            tags = record["标签"] or None
+            if tags and len(tags) > 200:
+                errors.append("标签长度不能超过 200 个字符")
 
             priority = record["优先级"] or "P1"
             if priority not in ALLOWED_PRIORITIES:
@@ -525,15 +535,15 @@ class TestCaseService:
                 module_id=node.id,
                 module=node.name,
                 module_code=module_path,
-                title=record["标题"],
+                title=title,
                 priority=priority,
                 case_type=case_type,
-                source=record["来源"] or None,
+                source=source,
                 precondition=record["前置条件"] or None,
                 steps=record["步骤"] or None,
                 expected_result=record["预期结果"],
                 status=status,
-                tags=record["标签"] or None,
+                tags=tags,
                 case_code=case_code,
             )
             self.db.add(tc)

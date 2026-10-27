@@ -5,14 +5,14 @@
 1. 接口同步阶段（快，< 1s，失败即抛错且不留半成品）
    - 流式落盘 zip 到临时目录
    - zip 结构与安全检查 → 解析出唯一的顶层项目目录 <proj_dir>
-   - 校验 <proj_dir>/tests 存在、目录未被其他项目占用
+   - 校验 <proj_dir>/tests（或 test_case）存在、目录未被其他项目占用
    - 置 code_init_status='pending' 后下发后台任务
 
 2. 后台任务（慢，解压 + pip install 可能数分钟）
    - 解压 <proj_dir>/** 到临时 staging（目标目录此时完全未被触碰）
-   - 复检 staging 内存在 tests 目录
+   - 复检 staging 内存在自动化用例目录（tests / test_case）
    - 逐条投放到 {PROJECT_CODE_BASE_DIR}/<proj_dir>（同名覆盖、异名保留）
-   - 回写 projects.auto_root_path = {BASE_DIR}/<proj_dir>/tests
+   - 回写 projects.auto_root_path = {BASE_DIR}/<proj_dir>/{tests|test_case}
    - 用项目的 python_path 执行 pip install -r requirements.txt
    - 写回 code_init_status / error / log / at
 
@@ -40,10 +40,14 @@ from app.db.session import AsyncSessionLocal
 from app.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.models.project import Project
 from app.utils.logger import logger
+from app.utils.redis import acquire_lock, release_lock
 
 if TYPE_CHECKING:
     from fastapi import UploadFile
     from sqlalchemy.ext.asyncio import AsyncSession
+
+# 初始化锁有效期（秒）：比 pip 超时多留 5 分钟，进程异常退出后可自动解锁
+_INIT_LOCK_TTL = settings.PROJECT_CODE_INIT_TIMEOUT + 300
 
 
 # 进行中的状态：该状态下不允许再次上传，避免并发写同一目录
@@ -57,6 +61,10 @@ _NOISE_TOP_LEVEL = {"__MACOSX", ".DS_Store", "Thumbs.db", "desktop.ini"}
 
 # 项目目录名：允许字母、数字、点、下划线、短横线
 _PROJ_DIR_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+
+# 自动化用例目录名（按优先级）：项目文件夹内含其一即可，
+# 回写 auto_root_path 时取实际命中的那个
+AUTO_ROOT_DIR_NAMES = ("tests", "test_case")
 
 # Windows 盘符前缀（如 C:）
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
@@ -153,6 +161,14 @@ def _is_within(root: Path, target: Path) -> bool:
         return False
 
 
+def detect_auto_root_dir(proj_root: Path) -> str | None:
+    """在项目根目录下按优先级探测自动化用例目录（tests / test_case），无则返回 None"""
+    for name in AUTO_ROOT_DIR_NAMES:
+        if (proj_root / name).is_dir():
+            return name
+    return None
+
+
 # ==================== 压缩包解析与校验 ====================
 
 
@@ -224,9 +240,10 @@ def inspect_zip(zip_path: Path) -> str:
             elif top not in top_dirs:
                 top_dirs.append(top)
 
+        auto_dir_hint = " / ".join(AUTO_ROOT_DIR_NAMES)
         if not top_dirs:
             raise BadRequestException(
-                "压缩包内未找到项目文件夹，请把整个项目文件夹（内含 tests 目录）打包后上传"
+                f"压缩包内未找到项目文件夹，请把整个项目文件夹（内含 {auto_dir_hint} 目录）打包后上传"
             )
         if len(top_dirs) > 1:
             raise BadRequestException(
@@ -237,18 +254,21 @@ def inspect_zip(zip_path: Path) -> str:
         if not _PROJ_DIR_RE.fullmatch(proj_dir):
             raise BadRequestException(f"项目文件夹名称不合法: {proj_dir}")
 
-        # 顶层直接是 tests/ 的情况：明显是把文件夹内容而非文件夹本身打了包
-        if proj_dir.lower() == "tests":
+        # 顶层直接是自动化用例目录的情况：明显是把文件夹内容而非文件夹本身打了包
+        if proj_dir.lower() in AUTO_ROOT_DIR_NAMES:
             raise BadRequestException(
-                "压缩包内未找到项目文件夹，请把整个项目文件夹（内含 tests 目录）打包后上传"
+                f"压缩包内未找到项目文件夹，请把整个项目文件夹（内含 {auto_dir_hint} 目录）打包后上传"
             )
 
-        has_tests = any(
-            len(p) >= 2 and p[0] == proj_dir and p[1] == "tests"
-            for p in (_split_zip_name(i.filename) for i in infos)
-        )
-        if not has_tests:
-            raise BadRequestException(f"项目文件夹 {proj_dir} 内未找到 tests 目录")
+        sub_dirs = {
+            parts[1]
+            for parts in (_split_zip_name(i.filename) for i in infos)
+            if len(parts) >= 2 and parts[0] == proj_dir
+        }
+        if not any(name in sub_dirs for name in AUTO_ROOT_DIR_NAMES):
+            raise BadRequestException(
+                f"项目文件夹 {proj_dir} 内未找到自动化用例目录（{auto_dir_hint}）"
+            )
 
         if top_files:
             logger.info(f"[项目代码初始化] 已忽略压缩包顶层散落文件: {top_files}")
@@ -352,11 +372,10 @@ def deploy(staging_proj: Path, target: Path) -> int:
 
 
 def find_requirements(project_root: Path) -> Path | None:
-    """项目根下的 requirements.txt；再回退 tests/ 下"""
-    for candidate in (
-        project_root / "requirements.txt",
-        project_root / "tests" / "requirements.txt",
-    ):
+    """项目根下的 requirements.txt；再回退自动化用例目录（tests / test_case）下"""
+    candidates = [project_root / "requirements.txt"]
+    candidates += [project_root / name / "requirements.txt" for name in AUTO_ROOT_DIR_NAMES]
+    for candidate in candidates:
         if candidate.is_file():
             return candidate
     return None
@@ -560,7 +579,9 @@ async def _execute_pip(project_id: int, logs: list[str]) -> None:
 # ==================== 后台任务 ====================
 
 
-async def _run_code_init(project_id: int, proj_dir: str, zip_path_str: str) -> None:
+async def _run_code_init(
+    project_id: int, proj_dir: str, zip_path_str: str, lock_token: str
+) -> None:
     """后台任务：解压 → 投放 → 回写根路径 → 安装依赖"""
     zip_path = Path(zip_path_str)
     logs = [f"[受理] 项目代码包初始化开始，项目目录: {proj_dir}"]
@@ -575,13 +596,15 @@ async def _run_code_init(project_id: int, proj_dir: str, zip_path_str: str) -> N
         logs.append(f"[解压] {files} 个文件，共 {size} 字节")
 
         staging_proj = staging / proj_dir
-        if not (staging_proj / "tests").is_dir():
-            raise BadRequestException(f"解压后未找到 {proj_dir}/tests 目录")
+        auto_dir = detect_auto_root_dir(staging_proj)
+        if auto_dir is None:
+            names = " / ".join(AUTO_ROOT_DIR_NAMES)
+            raise BadRequestException(f"解压后未找到 {proj_dir}/{names} 目录")
 
         copied = await asyncio.to_thread(deploy, staging_proj, target)
         logs.append(f"[投放] {copied} 个文件 -> {target}")
 
-        auto_root = str(target / "tests")
+        auto_root = str(target / auto_dir)
         await _update_project(project_id, auto_root_path=auto_root)
         logs.append(f"[路径] 自动化根路径 = {auto_root}")
 
@@ -594,9 +617,10 @@ async def _run_code_init(project_id: int, proj_dir: str, zip_path_str: str) -> N
         if staging is not None:
             shutil.rmtree(staging, ignore_errors=True)
         zip_path.unlink(missing_ok=True)
+        await release_lock(f"project_init:{project_id}", lock_token)
 
 
-async def _run_pip_only(project_id: int) -> None:
+async def _run_pip_only(project_id: int, lock_token: str) -> None:
     """后台任务：仅重跑依赖安装（代码已投放）"""
     logs = ["[重试] 重新安装项目依赖"]
     try:
@@ -605,6 +629,8 @@ async def _run_pip_only(project_id: int) -> None:
         logger.exception(f"[项目代码初始化] 重装依赖失败 project_id={project_id}")
         logs.append(f"[失败] {e}")
         await _finish(project_id, "failed", logs, error=_brief(str(e) or e.__class__.__name__))
+    finally:
+        await release_lock(f"project_init:{project_id}", lock_token)
 
 
 def _spawn(coro) -> None:
@@ -613,14 +639,16 @@ def _spawn(coro) -> None:
     task.add_done_callback(_running_tasks.discard)
 
 
-def dispatch_project_code_init(project_id: int, proj_dir: str, zip_path: str) -> None:
-    """下发代码初始化任务（调用方需已 commit 状态为 pending）"""
-    _spawn(_run_code_init(project_id, proj_dir, zip_path))
+def dispatch_project_code_init(
+    project_id: int, proj_dir: str, zip_path: str, lock_token: str
+) -> None:
+    """下发代码初始化任务（调用方需已 commit 状态为 pending，并持有初始化锁）"""
+    _spawn(_run_code_init(project_id, proj_dir, zip_path, lock_token))
 
 
-def dispatch_project_code_install(project_id: int) -> None:
-    """下发"仅重装依赖"任务（调用方需已 commit 状态为 installing）"""
-    _spawn(_run_pip_only(project_id))
+def dispatch_project_code_install(project_id: int, lock_token: str) -> None:
+    """下发"仅重装依赖"任务（调用方需已 commit 状态为 installing，并持有初始化锁）"""
+    _spawn(_run_pip_only(project_id, lock_token))
 
 
 # ==================== 接口层服务 ====================
@@ -668,28 +696,38 @@ class ProjectInitService:
         self, project_id: int, upload: "UploadFile", user_id: int
     ) -> dict:
         """上传代码包并触发初始化（同步阶段）"""
-        project = await self._get_project(project_id)
-        if project.code_init_status in ACTIVE_STATUSES:
+        # 跨 worker 互斥：状态检查与置 pending 之间存在窗口，用 Redis 锁串行化
+        lock_name = f"project_init:{project_id}"
+        lock_token = await acquire_lock(lock_name, _INIT_LOCK_TTL)
+        if lock_token is None:
             raise ConflictException("该项目代码正在初始化中，请稍后再试")
 
-        root = base_dir()
-        validate_python_path(project.python_path)
-
-        zip_path = await save_upload(upload)
+        zip_path: Path | None = None
         try:
+            project = await self._get_project(project_id)
+            if project.code_init_status in ACTIVE_STATUSES:
+                raise ConflictException("该项目代码正在初始化中，请稍后再试")
+
+            root = base_dir()
+            validate_python_path(project.python_path)
+
+            zip_path = await save_upload(upload)
             proj_dir = inspect_zip(zip_path)
             await self._ensure_dir_available(project_id, root / proj_dir)
+
+            project.code_init_status = "pending"
+            project.code_init_error = None
+            project.code_init_log = f"已受理，等待后台任务执行…（项目目录: {proj_dir}）"
+            project.code_init_by = user_id
+            await self.db.commit()
         except Exception:
-            zip_path.unlink(missing_ok=True)
+            if zip_path is not None:
+                zip_path.unlink(missing_ok=True)
+            await release_lock(lock_name, lock_token)
             raise
 
-        project.code_init_status = "pending"
-        project.code_init_error = None
-        project.code_init_log = f"已受理，等待后台任务执行…（项目目录: {proj_dir}）"
-        project.code_init_by = user_id
-        await self.db.commit()
-
-        dispatch_project_code_init(project_id, proj_dir, str(zip_path))
+        # 锁由后台任务在结束时释放，保证整个初始化期间独占
+        dispatch_project_code_init(project_id, proj_dir, str(zip_path), lock_token)
         logger.info(f"[项目代码初始化] 已下发 project_id={project_id} proj_dir={proj_dir}")
         return {
             "project_id": project_id,
@@ -700,8 +738,8 @@ class ProjectInitService:
     async def stage_auto_code_zip(self, project_id: int) -> tuple[Path, str]:
         """打包该项目自动化代码所在的项目目录，返回 (临时 zip 路径, 下载文件名)
 
-        自动化根路径形如 {BASE_DIR}/<项目目录>/tests，这里打包的是它所在的
-        整个项目目录 <项目目录>（含 tests、requirements.txt 等）。
+        自动化根路径形如 {BASE_DIR}/<项目目录>/{tests|test_case}，这里打包的是它所在的
+        整个项目目录 <项目目录>（含 tests/test_case、requirements.txt 等）。
         """
         project = await self._get_project(project_id)
         raw = (project.auto_root_path or "").strip()
@@ -743,21 +781,30 @@ class ProjectInitService:
 
     async def reinstall_and_dispatch(self, project_id: int) -> dict:
         """仅重跑依赖安装（免重新上传代码包）"""
-        project = await self._get_project(project_id)
-        if project.code_init_status != "failed":
-            raise BadRequestException("仅初始化失败的项目可以重装依赖")
+        lock_name = f"project_init:{project_id}"
+        lock_token = await acquire_lock(lock_name, _INIT_LOCK_TTL)
+        if lock_token is None:
+            raise ConflictException("该项目代码正在初始化中，请稍后再试")
 
-        _, python_path = await _load_pip_context(project_id)
-        validate_python_path(python_path)
-        project_root = Path(project.auto_root_path).parent
-        if find_requirements(project_root) is None:
-            raise BadRequestException(
-                f"项目目录 {project_root} 下未找到 requirements.txt，请重新上传代码包"
-            )
+        try:
+            project = await self._get_project(project_id)
+            if project.code_init_status != "failed":
+                raise BadRequestException("仅初始化失败的项目可以重装依赖")
 
-        project.code_init_status = "installing"
-        project.code_init_error = None
-        await self.db.commit()
+            _, python_path = await _load_pip_context(project_id)
+            validate_python_path(python_path)
+            project_root = Path(project.auto_root_path).parent
+            if find_requirements(project_root) is None:
+                raise BadRequestException(
+                    f"项目目录 {project_root} 下未找到 requirements.txt，请重新上传代码包"
+                )
 
-        dispatch_project_code_install(project_id)
+            project.code_init_status = "installing"
+            project.code_init_error = None
+            await self.db.commit()
+        except Exception:
+            await release_lock(lock_name, lock_token)
+            raise
+
+        dispatch_project_code_install(project_id, lock_token)
         return {"project_id": project_id, "code_init_status": "installing"}

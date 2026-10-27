@@ -1,4 +1,5 @@
 import asyncio
+import os
 from logging.config import fileConfig
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
@@ -9,6 +10,13 @@ config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# 优先使用环境变量 DATABASE_URL（容器 / CI 场景，地址指向服务名而非 localhost），
+# 未设置时回退到 alembic.ini 中的 sqlalchemy.url（本地开发）。
+# ConfigParser 会对 % 做插值，故需转义，避免 URL 编码（如 %40）被误解析。
+_env_database_url = os.getenv("DATABASE_URL")
+if _env_database_url:
+    config.set_main_option("sqlalchemy.url", _env_database_url.replace("%", "%%"))
 
 from app.models.base import Base
 import app.models  # noqa: F401

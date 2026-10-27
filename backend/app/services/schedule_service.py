@@ -36,6 +36,7 @@ from app.services.auto_exec_service import (
     _running_tasks,
     find_running_case_titles,
     format_conflict_titles,
+    mark_batch_started,
 )
 from app.utils.logger import logger
 
@@ -222,10 +223,11 @@ async def trigger_schedule(schedule_id: int, *, manual: bool = False) -> None:
                 pt.result_desc = "正在执行中..."
         await db.commit()
 
-    # 认领成功：后台执行（与手动批量共用串行执行内核）
+    # 认领成功：登记本轮 token（Redis），标注执行中，后台执行（与手动批量共用串行执行内核）
+    batch_token = await mark_batch_started(plan_id)
     task = asyncio.create_task(
         _run_schedule_batch(
-            schedule_id, plan_id, creator_id, entries, python_path, cwd
+            schedule_id, plan_id, creator_id, entries, python_path, cwd, batch_token
         )
     )
     _running_tasks.add(task)
@@ -239,6 +241,7 @@ async def _run_schedule_batch(
     entries: list[tuple[int, int, str, str]],
     python_path: str,
     cwd: str,
+    batch_token: str,
 ) -> None:
     """执行一轮定时批量（串行），结束后回写任务行状态"""
     started_at = datetime.now()
@@ -246,7 +249,7 @@ async def _run_schedule_batch(
         # 用例的 running 预标记已在认领事务内完成，这里直接执行；
         # tester_id 为任务创建人，结果与执行日志的测试人均记为其本人
         await _execute_cases_sequential(
-            AsyncSessionLocal, plan_id, entries, python_path, cwd, tester_id
+            AsyncSessionLocal, plan_id, entries, python_path, cwd, tester_id, batch_token
         )
         # 若被"停止执行"中断，剩余用例会被标记为已终止
         if plan_id and await _count_aborted(plan_id, [e[0] for e in entries]):

@@ -16,11 +16,10 @@ Casbin 权限服务：基于 RBAC + 域模型实现 API/菜单/按钮三种权�
 import asyncio
 import os
 import threading
-from datetime import datetime
 from typing import List
 
 from casbin import Enforcer
-from sqlalchemy import select, or_, text
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user_role import user_roles
@@ -29,7 +28,6 @@ from app.models.role_menu import role_menus
 from app.models.permission import Permission
 from app.models.menu import Menu
 from app.models.role import Role
-from app.models.api_key import ApiKey
 from app.utils.logger import logger
 
 # 权限域常量
@@ -186,18 +184,7 @@ async def sync_policies(db: AsyncSession) -> None:
     for row in rm_rows:
         role_menu_map.setdefault(row.role_id, set()).add(row.menu_id)
 
-    # 7. API 密钥-角色关联（活跃且有关联角色的密钥）
-    api_key_stmt = select(ApiKey).where(
-        ApiKey.is_active == True,
-        ApiKey.role_id.isnot(None),
-    )
-    api_key_result = await db.execute(api_key_stmt)
-    api_keys = list(api_key_result.scalars().all())
-    api_key_role_pairs: list[tuple[int, str]] = []
-    for ak in api_keys:
-        role_code = role_id_to_code.get(ak.role_id)
-        if role_code and (not ak.expires_at or ak.expires_at > datetime.now()):
-            api_key_role_pairs.append((ak.id, role_code))
+    # 7. API 密钥无需单独授权：密钥认证后直接以归属用户身份校验权限
 
     # ---- 第二步：构建新 Enforcer ----
     new_enforcer = Enforcer(_get_model_path())
@@ -209,10 +196,7 @@ async def sync_policies(db: AsyncSession) -> None:
             for dom in [DOMAIN_API, DOMAIN_MENU, DOMAIN_BUTTON]:
                 new_enforcer.add_named_grouping_policy("g", f"user:{uid}", f"role:{rc}", dom)
 
-    # API 密钥 -> 角色继承
-    for ak_id, role_code in api_key_role_pairs:
-        for dom in [DOMAIN_API, DOMAIN_MENU, DOMAIN_BUTTON]:
-            new_enforcer.add_named_grouping_policy("g", f"user:api_key_{ak_id}", f"role:{role_code}", dom)
+    # API 密钥不再有独立的 Casbin 主体：认证时直接切换为归属用户
 
     # 角色 -> API 权限（仅来自 Permission 表）
     for role_id, perm_ids in role_perm_map.items():
@@ -254,7 +238,7 @@ async def sync_policies(db: AsyncSession) -> None:
         logger.warning(f"Casbin 策略持久化失败（不影响内存策略）: {e}")
 
     policy_count = len(new_enforcer.get_policy()) + len(new_enforcer.get_grouping_policy())
-    logger.info(f"Casbin 策略同步完成: {len(user_role_pairs)} 个用户, {len(api_key_role_pairs)} 个API密钥, {policy_count} 条策略")
+    logger.info(f"Casbin 策略同步完成: {len(user_role_pairs)} 个用户, {policy_count} 条策略")
 
 
 def _get_casbin_subject(user_id: int) -> str:
@@ -460,55 +444,6 @@ def _persist_policies_to_db() -> None:
         persist_enforcer.save_policy()
     except Exception as e:
         logger.warning(f"Casbin 策略持久化失败（不影响内存策略）: {e}")
-
-
-def _sync_single_api_key_policy_db(subject: str, role_code: str | None) -> None:
-    """在 casbin_rule 表中增量更新单个 API Key 的继承策略（单事务，避免全表重写）"""
-    sync_engine = _create_sync_engine()
-    try:
-        with sync_engine.begin() as conn:
-            conn.execute(
-                text("DELETE FROM casbin_rule WHERE ptype = 'g' AND v0 = :subject"),
-                {"subject": subject},
-            )
-            if role_code:
-                for dom in [DOMAIN_API, DOMAIN_MENU, DOMAIN_BUTTON]:
-                    conn.execute(
-                        text(
-                            "INSERT INTO casbin_rule (ptype, v0, v1, v2) "
-                            "VALUES ('g', :subject, :role, :dom)"
-                        ),
-                        {"subject": subject, "role": f"role:{role_code}", "dom": dom},
-                    )
-    except Exception as e:
-        logger.warning(f"Casbin API Key 策略增量持久化失败: {e}")
-    finally:
-        sync_engine.dispose()
-
-
-async def update_api_key_policy(api_key_id: int, role_code: str | None) -> None:
-    """
-    轻量级更新单个 API Key 的 Casbin 策略（不触发全量同步）。
-    删除旧策略，如果 role_code 不为 None 则添加新策略，然后持久化 + 版本号递增。
-    """
-    enforcer = await get_enforcer()
-    subject = f"user:api_key_{api_key_id}"
-
-    with _enforcer_lock:
-        # 移除该 API Key 的所有现有策略
-        for dom in [DOMAIN_API, DOMAIN_MENU, DOMAIN_BUTTON]:
-            enforcer.remove_filtered_named_grouping_policy("g", 0, subject)
-
-        # 添加新策略
-        if role_code:
-            for dom in [DOMAIN_API, DOMAIN_MENU, DOMAIN_BUTTON]:
-                enforcer.add_named_grouping_policy("g", subject, f"role:{role_code}", dom)
-
-    # 增量持久化到数据库（单事务直接 SQL，避免全表重写）
-    _sync_single_api_key_policy_db(subject, role_code)
-
-    # 版本号递增（通知其他 Worker 重新加载）
-    await _bump_policy_version()
 
 
 async def _reload_if_stale(db: AsyncSession) -> None:

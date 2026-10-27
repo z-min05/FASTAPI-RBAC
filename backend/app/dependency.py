@@ -3,9 +3,8 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.security import decode_token
-from app.exceptions import UnauthorizedException, ForbiddenException, BadRequestException
+from app.exceptions import UnauthorizedException, ForbiddenException
 from app.models.user import User
-from app.models.api_key import ApiKey
 from app.core.casbin_service import (
     check_api_permission,
     check_menu_permission,
@@ -56,28 +55,29 @@ async def get_current_active_user(
 
 
 async def _authenticate_api_key(token: str, db: AsyncSession) -> User:
-    """通过 API Key 认证，返回权限跟随关联角色的虚拟用户"""
+    """通过 API Key 认证，返回密钥归属的真实用户（权限与操作归属均同该用户）"""
     from app.services.api_key_service import ApiKeyService
 
     api_key = await ApiKeyService.validate_key(db, token)
     if not api_key:
         raise UnauthorizedException("API 密钥无效或已过期")
 
-    # 使用负数 ID 标记 API 密钥用户，Casbin 检查时识别为 user:api_key_{id}
-    user = User(
-        id=-(api_key.id),
-        username=f"api_key_{api_key.id}",
-        email="",
-        nickname=f"API密钥({api_key.name})",
-        is_active=True,
-        is_superuser=False,
-    )
-    # 附加角色信息供后续权限校验使用
-    user._api_key_role_id = api_key.role_id
+    owner_id = api_key.user_id or api_key.created_by
+    if owner_id is None:
+        raise UnauthorizedException("该 API 密钥未绑定归属用户，请重新创建")
+
+    from app.repositories.user_repo import UserRepository
+
+    repo = UserRepository(db)
+    user = await repo.get_by_id(owner_id)
+    if user is None:
+        raise UnauthorizedException("API 密钥归属用户不存在")
+    if not user.is_active:
+        raise UnauthorizedException("API 密钥归属用户已被禁用")
+
+    # 标记来源：权限、操作人、责任人全部使用归属用户本人
     user._is_api_key = True
-    # 归属用户：API 密钥没有真实 user_id，凡需把"操作人/责任人"落库的字段
-    # （测试人 tester_id、定时任务创建人 created_by 等）统一使用密钥归属用户（创建人）
-    user._owner_user_id = api_key.created_by
+    user._api_key_id = api_key.id
     return user
 
 
@@ -243,18 +243,8 @@ async def get_current_user_by_api_key(
 
 
 def actor_user_id(current_user: User) -> int:
-    """返回需要落库的"操作人/责任人"用户 id（真实用户 id，正数）。
+    """返回需要落库的"操作人/责任人"用户 id。
 
-    - 真实登录用户（JWT）：返回本人 id
-    - API 密钥调用：返回密钥的归属用户 id（api_keys.created_by）；
-      未绑定时直接报错，避免把负 id 写入带 FK 的 tester_id/created_by 等字段
+    API 密钥认证返回的就是归属用户本人，因此统一返回 current_user.id。
     """
-    if getattr(current_user, "_is_api_key", False):
-        owner = getattr(current_user, "_owner_user_id", None)
-        if owner is None:
-            raise BadRequestException(
-                "该 API 密钥未绑定归属用户（创建人），无法记录操作人，"
-                "请联系管理员回填 api_keys.created_by 后重试"
-            )
-        return owner
     return current_user.id

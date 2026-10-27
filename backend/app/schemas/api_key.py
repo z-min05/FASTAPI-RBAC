@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 
 class ApiKeyCreate(BaseModel):
     name: str = Field(..., max_length=100, description="密钥名称")
-    role_id: int = Field(..., description="关联角色 ID（必填）")
     expires_at: Optional[datetime] = Field(None, description="过期时间，null 永不过期")
 
 
@@ -19,7 +18,8 @@ class ApiKeyResponse(BaseModel):
     id: int
     name: str
     key_prefix: str
-    role_id: Optional[int] = None
+    user_id: Optional[int] = None
+    user_name: Optional[str] = None
     expires_at: Optional[datetime] = None
     is_active: bool
     last_used_at: Optional[datetime] = None

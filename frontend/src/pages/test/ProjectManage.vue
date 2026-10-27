@@ -140,7 +140,7 @@
             placeholder="上传代码包后自动生成"
           />
           <div class="form-hint">
-            由服务端配置的全局根目录 + 压缩包顶层文件夹名自动推导（…/&lt;项目文件夹&gt;/tests），无需手工填写
+            由服务端配置的全局根目录 + 压缩包顶层文件夹名自动推导（…/&lt;项目文件夹&gt;/tests 或 test_case），无需手工填写
           </div>
         </a-form-item>
         <a-form-item label="Python 路径">
@@ -165,7 +165,7 @@
             </p>
             <p class="ant-upload-text">点击或拖拽 .zip 压缩包到此处</p>
             <p class="ant-upload-hint">
-              压缩包顶层需有唯一的项目文件夹（如 meterbot）且内含 tests 目录；
+              压缩包顶层需有唯一的项目文件夹（如 meterbot）且内含 tests 或 test_case 目录；
               将整体解压到服务端配置的全局根目录，随后用所选 Python 自动安装 requirements.txt
             </p>
           </a-upload-dragger>
@@ -208,7 +208,7 @@
         </p>
         <p class="ant-upload-text">点击或拖拽 .zip 压缩包到此处</p>
         <p class="ant-upload-hint">
-          顶层需有唯一的项目文件夹且内含 tests 目录；同名文件覆盖、多出的旧文件保留
+          顶层需有唯一的项目文件夹且内含 tests 或 test_case 目录；同名文件覆盖、多出的旧文件保留
         </p>
       </a-upload-dragger>
       <div class="form-hint selected-file" v-if="reinitFile">

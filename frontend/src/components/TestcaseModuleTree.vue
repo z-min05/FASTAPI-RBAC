@@ -8,6 +8,7 @@
         allow-clear
       />
       <a-button
+        v-if="!filterOnly"
         class="create-root-btn"
         type="primary"
         size="small"
@@ -19,77 +20,80 @@
       </a-button>
     </div>
 
-    <a-spin :spinning="loading">
-      <a-tree
-        v-if="filteredTree.length"
-        :tree-data="filteredTree"
-        :field-names="{ title: 'name', key: 'id', children: 'children' }"
-        block-node
-        show-line
-        default-expand-all
-        :expanded-keys="expandedKeys"
-        :selected-keys="selectedKeys"
-        @expand="onExpand"
-        @select="onSelect"
-      >
-        <template #title="node">
-          <span class="node-title">
-            <a-tooltip :title="node.name" placement="right" :mouse-enter-delay="0.4">
-              <span class="node-name">
-                <template v-for="(part, index) in highlightParts(node.name)" :key="index">
-                  <span :class="{ 'keyword-hit': part.hit }">{{ part.text }}</span>
-                </template>
-              </span>
-            </a-tooltip>
-            <span class="node-tail">
-              <a-badge
-                v-if="node.total_case_count"
-                :count="node.total_case_count"
-                :number-style="{ backgroundColor: '#1677ff' }"
-              />
-              <span class="node-actions">
-                <a-space :size="2">
-                  <file-add-outlined
-                    v-if="node.is_leaf"
-                    class="node-icon"
-                    title="在此模块新增用例"
-                    @click.stop="onCreateCase(node)"
-                  />
-                  <plus-outlined
-                    v-permission="'testcase:module:create'"
-                    class="node-icon"
-                    title="新增子模块"
-                    @click.stop="openCreate(node)"
-                  />
-                  <edit-outlined
-                    v-permission="'testcase:module:update'"
-                    class="node-icon"
-                    title="编辑模块"
-                    @click.stop="openEdit(node)"
-                  />
-                  <a-popconfirm
-                    title="确定删除该模块？"
-                    placement="right"
-                    @confirm="handleDelete(node)"
-                  >
-                    <delete-outlined
-                      v-permission="'testcase:module:delete'"
-                      class="node-icon node-icon-danger"
-                      title="删除模块"
-                      @click.stop
+    <div class="tree-body">
+      <a-spin :spinning="loading">
+        <a-tree
+          v-if="filteredTree.length"
+          :tree-data="filteredTree"
+          :field-names="{ title: 'name', key: 'id', children: 'children' }"
+          block-node
+          show-line
+          default-expand-all
+          :expanded-keys="expandedKeys"
+          :selected-keys="selectedKeys"
+          @expand="onExpand"
+          @select="onSelect"
+        >
+          <template #title="node">
+            <span class="node-title">
+              <a-tooltip :title="node.name" placement="right" :mouse-enter-delay="0.4">
+                <span class="node-name">
+                  <template v-for="(part, index) in highlightParts(node.name)" :key="index">
+                    <span :class="{ 'keyword-hit': part.hit }">{{ part.text }}</span>
+                  </template>
+                </span>
+              </a-tooltip>
+              <span class="node-tail">
+                <a-badge
+                  v-if="node.total_case_count"
+                  :count="node.total_case_count"
+                  :number-style="{ backgroundColor: '#1677ff' }"
+                />
+                <span v-if="!filterOnly" class="node-actions">
+                  <a-space :size="2">
+                    <file-add-outlined
+                      v-if="node.is_leaf"
+                      class="node-icon"
+                      title="在此模块新增用例"
+                      @click.stop="onCreateCase(node)"
                     />
-                  </a-popconfirm>
-                </a-space>
+                    <plus-outlined
+                      v-permission="'testcase:module:create'"
+                      class="node-icon"
+                      title="新增子模块"
+                      @click.stop="openCreate(node)"
+                    />
+                    <edit-outlined
+                      v-permission="'testcase:module:update'"
+                      class="node-icon"
+                      title="编辑模块"
+                      @click.stop="openEdit(node)"
+                    />
+                    <a-popconfirm
+                      title="确定删除该模块？"
+                      placement="right"
+                      @confirm="handleDelete(node)"
+                    >
+                      <delete-outlined
+                        v-permission="'testcase:module:delete'"
+                        class="node-icon node-icon-danger"
+                        title="删除模块"
+                        @click.stop
+                      />
+                    </a-popconfirm>
+                  </a-space>
+                </span>
               </span>
             </span>
-          </span>
-        </template>
-      </a-tree>
-      <a-empty v-else class="tree-empty" description="暂无模块，请先新建模块" />
-    </a-spin>
+          </template>
+        </a-tree>
+        <a-empty v-else class="tree-empty" :description="filterOnly ? '暂无模块' : '暂无模块，请先新建模块'" />
+      </a-spin>
+    </div>
 
-    <!-- 模块新增 / 编辑 -->
+    <!-- 模块新增 / 编辑（只读筛选模式下不提供维护入口） -->
     <a-modal
+      v-if="!filterOnly"
       v-model:open="modalVisible"
       :title="isEdit ? '编辑模块' : '新增模块'"
       ok-text="保存"
@@ -100,7 +104,7 @@
     >
       <a-form :model="formState" :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
         <a-form-item label="所属项目">
-          <span class="readonly-text">{{ projectId }}</span>
+          <span class="readonly-text">{{ projectName || '-' }}</span>
         </a-form-item>
         <a-form-item label="上级模块">
           <a-tree-select
@@ -140,10 +144,14 @@ import { getModuleTree, createModule, updateModule, deleteModule } from '@/api/t
 
 const props = defineProps({
   projectId: { type: Number, required: true },
-  selectedModuleId: { type: Number, default: null }
+  // 所属项目名称：仅用于弹窗只读展示，父组件已加载项目列表，避免重复请求
+  projectName: { type: String, default: '' },
+  selectedModuleId: { type: Number, default: null },
+  // 只读筛选模式：仅用于「按模块筛选」列表，隐藏模块维护入口（新建/编辑/删除）
+  filterOnly: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select', 'create-case', 'changed'])
+const emit = defineEmits(['select', 'create-case', 'changed', 'loaded'])
 
 // 目录名/文件名：只允许字母、数字、下划线、短横线
 const CODE_PATTERN = /^[A-Za-z0-9_-]{1,100}$/
@@ -280,6 +288,7 @@ async function loadTree() {
   if (!props.projectId) {
     treeData.value = []
     expandedKeys.value = []
+    emit('loaded', [])
     return
   }
   loading.value = true
@@ -293,6 +302,8 @@ async function loadTree() {
     expandedKeys.value = []
   } finally {
     loading.value = false
+    // 把树数据交给父级（用于按模块筛选时展开子模块）
+    emit('loaded', treeData.value)
   }
 }
 
@@ -300,7 +311,13 @@ function onExpand(keys) {
   expandedKeys.value = keys
 }
 
-function onSelect(_keys, info) {
+function onSelect(keys, info) {
+  // 再次点击已选中的模块 = 取消筛选，回到「全部用例」
+  const cleared = (info && info.selected === false) || !keys || keys.length === 0
+  if (cleared) {
+    emit('select', null)
+    return
+  }
   const node = info && info.node
   if (!node || node.id === undefined || node.id === null) return
   emit('select', node.id)
@@ -439,8 +456,22 @@ onMounted(loadTree)
 </script>
 
 <style scoped>
+/* 高度由父级容器给定：搜索/新建按钮固定顶部，模块树本体在剩余空间内滚动 */
+.module-tree {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
 .tree-header {
+  flex: none;
   margin-bottom: 8px;
+}
+.tree-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .create-root-btn {
   margin-top: 8px;

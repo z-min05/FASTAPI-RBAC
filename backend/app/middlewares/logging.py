@@ -2,8 +2,10 @@ import time
 import json
 import re
 import hashlib
+from typing import Any
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import Response as StarletteResponse
 from sqlalchemy import select
 from app.utils.logger import logger
 from app.security import decode_token
@@ -71,6 +73,43 @@ def _mask_secret_values(content: str | None) -> str | None:
     return json.dumps(walk(data), ensure_ascii=False)
 
 
+def _parse_json_object(content: str | None) -> dict[str, Any] | None:
+    if not content:
+        return None
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _effective_status(http_status: int, response_body: str | None) -> int:
+    """优先使用 HTTP 状态码；兼容 HTTP 200 + 业务 code=5xx 的响应。"""
+    if http_status >= 400:
+        return http_status
+    data = _parse_json_object(response_body)
+    code = data.get("code") if data else None
+    if isinstance(code, int) and 400 <= code <= 599:
+        return code
+    if isinstance(code, str) and code.isdigit() and 400 <= int(code) <= 599:
+        return int(code)
+    return http_status
+
+
+def _response_error_message(response_body: str | None) -> str | None:
+    data = _parse_json_object(response_body)
+    if not data:
+        return None
+    message = data.get("message") or data.get("detail")
+    return str(message)[:1000] if message else None
+
+
+def _exception_summary(exc: Exception) -> str:
+    detail = str(exc).strip()
+    summary = type(exc).__name__ + (f": {detail}" if detail else "")
+    return summary[:1000]
+
+
 async def _resolve_operator(auth_header: str, db) -> tuple[int | None, str | None]:
     """解析请求操作者身份，返回 (user_id, 显示名)。
 
@@ -116,6 +155,46 @@ async def _resolve_operator(auth_header: str, db) -> tuple[int | None, str | Non
     return int(user_id), username
 
 
+async def _write_operation_log(
+    *,
+    request: Request,
+    body: str | None,
+    response_body: str | None,
+    status_code: int,
+    http_status_code: int,
+    duration: int,
+    message: str,
+) -> None:
+    try:
+        async with AsyncSessionLocal() as db:
+            user_id, username = await _resolve_operator(
+                request.headers.get("authorization", ""), db
+            )
+            log_entry = OperationLog(
+                user_id=user_id,
+                username=username,
+                method=request.method,
+                path=request.url.path,
+                params=_mask_sensitive(body),
+                status_code=status_code,
+                ip=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent", "")[:255],
+                duration=duration,
+                message=message[:2000],
+                response=_mask_secret_values(response_body),
+            )
+            db.add(log_entry)
+            await db.commit()
+    except Exception:
+        logger.exception(
+            "写入操作日志失败 method=%s path=%s http_status=%s status=%s",
+            request.method,
+            request.url.path,
+            http_status_code,
+            status_code,
+        )
+
+
 class LoggingMiddleware(BaseHTTPMiddleware):
     """请求日志 / 操作审计中间件：非 GET 请求写入数据库"""
 
@@ -132,7 +211,43 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 body = None
 
         # 处理请求
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            duration = int((time.time() - start_time) * 1000)
+            path = request.url.path
+            error_summary = _exception_summary(exc)
+            log_data = {
+                "method": request.method,
+                "path": path,
+                "status_code": 500,
+                "http_status_code": 500,
+                "duration_ms": duration,
+                "client_ip": request.client.host if request.client else None,
+                "error": error_summary,
+            }
+            logger.exception(
+                "请求处理异常 %s",
+                json.dumps(log_data, ensure_ascii=False),
+            )
+
+            if path.startswith("/api") and not path.endswith(AUTH_EXCLUDED_SUFFIXES):
+                if request.method != "GET":
+                    error_body = json.dumps(
+                        {"code": 500, "message": "Internal Server Error", "data": None},
+                        ensure_ascii=False,
+                    )
+                    await _write_operation_log(
+                        request=request,
+                        body=body,
+                        response_body=error_body,
+                        status_code=500,
+                        http_status_code=500,
+                        duration=duration,
+                        message=f"{request.method} {path} -> 500 ({error_summary})",
+                    )
+            # 继续抛出，交给 FastAPI/Starlette 生成原有的 500 响应。
+            raise
 
         # 计算耗时
         duration = int((time.time() - start_time) * 1000)
@@ -152,6 +267,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         # 并且重建响应时只保留前 4000 字符——SSE 末尾的 done 事件会被截掉，
         # 导致前端永远等不到流结束。因此流式响应不做响应体捕获/重建。
         content_type = response.headers.get("content-type", "")
+        response_exception: Exception | None = None
         if request.method != "GET" and not exclude_audit and "text/event-stream" not in content_type:
             try:
                 # 读取 response body chunks
@@ -170,7 +286,6 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 # 必须剔除原 content-length：Starlette 只在该头缺失时才会按新 body
                 # 重算（见 starlette/responses.py 的 init_headers），否则头部声明的
                 # 长度与实际 body 不一致，浏览器会报 net::ERR_CONTENT_LENGTH_MISMATCH。
-                from starlette.responses import Response as StarletteResponse
                 headers = {
                     k: v
                     for k, v in response.headers.items()
@@ -183,44 +298,64 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                     media_type=response.media_type,
                 )
                 response = new_response
-            except Exception:
+            except Exception as exc:
+                response_exception = exc
                 response_body = None
+
+        http_status_code = response.status_code
+        status_code = _effective_status(http_status_code, response_body)
+        error_message = (
+            _response_error_message(response_body) if status_code >= 400 else None
+        )
+        if response_exception is not None:
+            status_code = 500
+            http_status_code = 500
+            error_message = _exception_summary(response_exception)
 
         # 控制台日志
         log_data = {
             "method": request.method,
             "path": path,
-            "status_code": response.status_code,
+            "status_code": status_code,
+            "http_status_code": http_status_code,
             "duration_ms": duration,
             "client_ip": request.client.host if request.client else None,
         }
-        logger.info(json.dumps(log_data, ensure_ascii=False))
+        if error_message:
+            log_data["error"] = error_message
+        if response_exception is not None:
+            logger.exception(
+                "读取响应流异常 %s",
+                json.dumps(log_data, ensure_ascii=False),
+                exc_info=(
+                    type(response_exception),
+                    response_exception,
+                    response_exception.__traceback__,
+                ),
+            )
+        elif status_code >= 500:
+            logger.error(json.dumps(log_data, ensure_ascii=False))
+        else:
+            logger.info(json.dumps(log_data, ensure_ascii=False))
 
         # 非 GET 请求写入数据库（登录/注册除外）
         if request.method != "GET" and not exclude_audit:
-            try:
-                async with AsyncSessionLocal() as db:
-                    # 解析操作者身份：JWT 用户 或 API 密钥（负数 user_id + 显示名）
-                    user_id, username = await _resolve_operator(
-                        request.headers.get("authorization", ""), db
-                    )
-                    log_entry = OperationLog(
-                        user_id=user_id,
-                        username=username,
-                        method=request.method,
-                        path=path,
-                        params=_mask_sensitive(body),
-                        status_code=response.status_code,
-                        ip=request.client.host if request.client else None,
-                        user_agent=request.headers.get("user-agent", "")[:255],
-                        duration=duration,
-                        message=f"{request.method} {path} -> {response.status_code}",
-                        # 响应体落库前脱敏，防止 full_key 等明文密钥进入审计日志
-                        response=_mask_secret_values(response_body),
-                    )
-                    db.add(log_entry)
-                    await db.commit()
-            except Exception as e:
-                logger.error(f"写入操作日志失败: {e}")
+            message = f"{request.method} {path} -> {status_code}"
+            if http_status_code != status_code:
+                message += f" (HTTP {http_status_code})"
+            if error_message:
+                message += f" ({error_message})"
+            await _write_operation_log(
+                request=request,
+                body=body,
+                response_body=response_body,
+                status_code=status_code,
+                http_status_code=http_status_code,
+                duration=duration,
+                message=message,
+            )
+
+        if response_exception is not None:
+            raise response_exception
 
         return response

@@ -4,10 +4,6 @@ export function getApiKeys(params) {
   return request.get('/api-keys', { params })
 }
 
-export function getApiKeyRoles() {
-  return request.get('/api-keys/roles')
-}
-
 export function createApiKey(data) {
   return request.post('/api-keys', data)
 }

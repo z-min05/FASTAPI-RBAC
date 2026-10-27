@@ -150,7 +150,7 @@ class ProjectEnvService:
         return project
 
     def _resolve_root(self, project: Project) -> Path:
-        """项目根目录 = auto_root_path(tests 目录) 的父目录"""
+        """项目根目录 = auto_root_path(tests / test_case 目录) 的父目录"""
         raw = (project.auto_root_path or "").strip()
         if not raw:
             raise BadRequestException("该项目尚未生成自动化根路径，请先上传代码包并完成初始化")

@@ -42,10 +42,12 @@
         />
         <a-select
           v-model:value="resultFilter"
-          placeholder="测试结果"
-          style="width: 120px"
+          mode="multiple"
+          placeholder="测试结果（可多选）"
+          style="min-width: 180px; max-width: 320px"
+          :max-tag-count="1"
           allow-clear
-          :options="resultOptions"
+          :options="resultFilterOptions"
           @change="reload"
         />
         <a-select
@@ -92,50 +94,63 @@
       </a-space>
     </div>
 
-    <!-- 计划用例表格 -->
-    <a-table
-      :columns="columns"
-      :data-source="tableData"
-      :loading="loading"
-      :pagination="pagination"
-      @change="handleTableChange"
-      row-key="id"
-      size="middle"
-      :row-selection="{
-        selectedRowKeys,
-        onChange: onSelectChange,
-        preserveSelectedRowKeys: true,
-        getCheckboxProps: r => ({ disabled: !isSelectable(r) })
-      }"
-      :scroll="TABLE_SCROLL_TALL(columns)"
-      table-layout="fixed"
-    >
-      <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'priority'">
-          <a-tag :color="priorityColor(record.priority)">{{ record.priority }}</a-tag>
-        </template>
-        <template v-if="column.key === 'tester'">
-          {{ record.tester_name || '-' }}
-        </template>
-        <template v-if="column.key === 'result'">
-          <a-tag :color="resultColor(record.result)">{{ resultLabel(record.result) }}</a-tag>
-        </template>
-        <template v-if="column.key === 'updated_at'">
-          {{ formatDate(record.updated_at) }}
-        </template>
-        <template v-if="column.key === 'action'">
-          <a-space>
-            <a-button type="link" size="small" @click="openCaseDetail(record)">查看</a-button>
-            <a-button v-if="record.module_code && record.case_code" type="link" size="small" :disabled="record.result === 'running'" @click="handleExecute(record)" v-permission="'plan:case:execute'">执行</a-button>
-            <a-button type="link" size="small" @click="openLogDrawer(record)" v-permission="'plan:case:list'">日志</a-button>
-            <a-button type="link" size="small" @click="openResultModal(record)" v-permission="'plan:case:result'">记录结果</a-button>
-            <a-popconfirm title="确定从该计划中移除这条用例？" @confirm="handleRemove(record.id)">
-              <a-button type="link" size="small" danger v-permission="'plan:case:remove'">移除</a-button>
-            </a-popconfirm>
-          </a-space>
-        </template>
-      </template>
-    </a-table>
+    <!-- 计划用例：左侧模块树筛选 + 右侧表格 -->
+    <div class="plan-body">
+      <div v-if="canViewModuleTree" class="module-panel">
+        <TestcaseModuleTree
+          :project-id="plan.project_id"
+          :project-name="plan.project_name || ''"
+          :selected-module-id="moduleFilter"
+          filter-only
+          @select="onModuleSelect"
+        />
+      </div>
+      <div class="table-panel">
+        <a-table
+          :columns="columns"
+          :data-source="tableData"
+          :loading="loading"
+          :pagination="pagination"
+          @change="handleTableChange"
+          row-key="id"
+          size="middle"
+          :row-selection="{
+            selectedRowKeys,
+            onChange: onSelectChange,
+            preserveSelectedRowKeys: true,
+            getCheckboxProps: r => ({ disabled: !isSelectable(r) })
+          }"
+          :scroll="TABLE_SCROLL_TALL(columns)"
+          table-layout="fixed"
+        >
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'priority'">
+              <a-tag :color="priorityColor(record.priority)">{{ record.priority }}</a-tag>
+            </template>
+            <template v-if="column.key === 'tester'">
+              {{ record.tester_name || '-' }}
+            </template>
+            <template v-if="column.key === 'result'">
+              <a-tag :color="resultColor(record.result)">{{ resultLabel(record.result) }}</a-tag>
+            </template>
+            <template v-if="column.key === 'updated_at'">
+              {{ formatDate(record.updated_at) }}
+            </template>
+            <template v-if="column.key === 'action'">
+              <a-space>
+                <a-button type="link" size="small" @click="openCaseDetail(record)">查看</a-button>
+                <a-button v-if="record.module_code && record.case_code" type="link" size="small" :disabled="record.result === 'running'" @click="handleExecute(record)" v-permission="'plan:case:execute'">执行</a-button>
+                <a-button type="link" size="small" @click="openLogDrawer(record)" v-permission="'plan:case:list'">日志</a-button>
+                <a-button type="link" size="small" @click="openResultModal(record)" v-permission="'plan:case:result'">记录结果</a-button>
+                <a-popconfirm title="确定从该计划中移除这条用例？" @confirm="handleRemove(record.id)">
+                  <a-button type="link" size="small" danger v-permission="'plan:case:remove'">移除</a-button>
+                </a-popconfirm>
+              </a-space>
+            </template>
+          </template>
+        </a-table>
+      </div>
+    </div>
 
     <!-- 编辑计划弹窗 -->
     <a-modal
@@ -502,24 +517,38 @@
           </div>
         </a-form-item>
         <a-form-item v-if="scheduleForm.mode === 'custom'" label="选择用例" required>
-          <a-select
-            v-model:value="scheduleForm.case_ids"
-            mode="multiple"
-            style="width: 100%"
-            :options="scheduleCandidateOptions"
-            :loading="scheduleCandidatesLoading"
-            placeholder="从计划内可自动化的用例中选择"
-            option-filter-prop="label"
-            :max-tag-count="6"
-            allow-clear
-          />
-          <div class="cron-hint">计划内可自动化用例共 {{ scheduleCandidates.length }} 条</div>
+          <a-space>
+            <a-button size="small" @click="schedulePickerVisible = true">
+              <template #icon><UnorderedListOutlined /></template>
+              选择用例
+            </a-button>
+            <span class="selected-tip">已选 {{ scheduleForm.case_ids.length }} 条</span>
+            <a-button
+              v-if="scheduleForm.case_ids.length"
+              type="link"
+              size="small"
+              @click="scheduleForm.case_ids = []"
+            >清空</a-button>
+          </a-space>
+          <div class="cron-hint">
+            计划内可自动化用例共 {{ scheduleCandidates.length }} 条，可按优先级 / 模块 / 标签筛选后勾选
+          </div>
         </a-form-item>
         <a-form-item label="任务说明">
           <a-textarea v-model:value="scheduleForm.description" :rows="2" maxlength="500" placeholder="可选" />
         </a-form-item>
       </a-form>
     </a-modal>
+
+    <!-- 指定用例：表格勾选（优先级 / 模块 / 标签筛选） -->
+    <ScheduleCasePicker
+      v-if="scheduleModalVisible"
+      v-model:open="schedulePickerVisible"
+      v-model="scheduleForm.case_ids"
+      :project-id="plan.project_id"
+      :candidates="scheduleCandidates"
+      :loading="scheduleCandidatesLoading"
+    />
   </div>
   <a-result v-else-if="pageError" status="warning" title="计划加载失败">
     <template #subTitle>{{ pageError }}</template>
@@ -534,7 +563,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { PlusOutlined, ArrowLeftOutlined, EditOutlined, DownloadOutlined, ReloadOutlined, FieldTimeOutlined } from '@ant-design/icons-vue'
+import { PlusOutlined, ArrowLeftOutlined, EditOutlined, DownloadOutlined, ReloadOutlined, FieldTimeOutlined, UnorderedListOutlined } from '@ant-design/icons-vue'
 import {
   getPlan,
   updatePlan,
@@ -560,6 +589,9 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { listAgents } from '@/api/agent'
 import { getRobotOptions } from '@/api/wecomRobot'
+import TestcaseModuleTree from '@/components/TestcaseModuleTree.vue'
+import ScheduleCasePicker from '@/components/ScheduleCasePicker.vue'
+import { hasAnyPermission } from '@/utils/permission'
 import { TABLE_SCROLL_TALL, TABLE_SCROLL_MODAL } from '@/utils/tableScroll'
 import dayjs from 'dayjs'
 
@@ -588,9 +620,14 @@ function isSelectable(record) {
 function currentPlanCaseParams(page, pageSize) {
   const params = { page, page_size: pageSize }
   if (keyword.value) params.keyword = keyword.value
-  if (resultFilter.value) params.result = resultFilter.value
+  if (resultFilter.value.length) params.results = resultFilter.value.join(',')
   if (testerFilter.value !== null && testerFilter.value !== undefined) {
     params.tester_id = testerFilter.value
+  }
+  // 按模块筛选时包含子模块下的用例（点非末级节点可看到整棵子树）
+  if (moduleFilter.value) {
+    params.module_id = moduleFilter.value
+    params.include_children = true
   }
   return params
 }
@@ -647,6 +684,11 @@ const resultOptions = [
   { label: '阻塞', value: 'blocked' },
   { label: '跳过', value: 'skipped' },
   { label: '执行中', value: 'running' }
+]
+// 结果筛选额外支持「待执行」（尚未记录结果，即 result 为空）
+const resultFilterOptions = [
+  { label: '待执行', value: 'pending' },
+  ...resultOptions
 ]
 
 function statusLabel(status) {
@@ -771,9 +813,13 @@ async function handleEditPlan() {
 
 // ---------- 计划用例列表 ----------
 const keyword = ref('')
-const resultFilter = ref(null)
+const resultFilter = ref([])
 const testerFilter = ref(null)
 const testerOptions = ref([])
+// 左侧模块树筛选的模块 ID（再次点击已选模块可取消，回到全部用例）
+const moduleFilter = ref(null)
+// 模块树接口复用 testcase:list 读权限；无权限的账号隐藏左侧筛选，不影响用例列表
+const canViewModuleTree = computed(() => hasAnyPermission(['testcase:list']))
 
 const columns = [
   { title: '用例标题', dataIndex: 'title', key: 'title', width: 320, ellipsis: true },
@@ -817,9 +863,17 @@ function reload() {
 
 function resetFilter() {
   keyword.value = ''
-  resultFilter.value = null
+  resultFilter.value = []
   testerFilter.value = null
+  moduleFilter.value = null
   reload()
+}
+
+// 点击树节点：按模块筛选（含子模块）；传 null 表示取消筛选查看全部
+function onModuleSelect(moduleId) {
+  moduleFilter.value = moduleId || null
+  pagination.current = 1
+  loadTestcases()
 }
 
 function handleTableChange(pag) {
@@ -1051,6 +1105,8 @@ const runningNowId = ref(null)
 const scheduleCandidatesLoading = ref(false)
 const scheduleCandidates = ref([])
 const scheduleModalVisible = ref(false)
+// 「指定用例」的表格勾选弹窗
+const schedulePickerVisible = ref(false)
 const scheduleSaving = ref(false)
 const scheduleForm = reactive({
   id: null,
@@ -1060,13 +1116,6 @@ const scheduleForm = reactive({
   case_ids: [],
   description: ''
 })
-
-const scheduleCandidateOptions = computed(() =>
-  scheduleCandidates.value.map(t => ({
-    value: t.testcase_id,
-    label: t.title || `用例#${t.testcase_id}`
-  }))
-)
 
 const scheduleColumns = [
   { title: '任务名称', dataIndex: 'name', key: 'name', width: 170, ellipsis: true },
@@ -1133,6 +1182,7 @@ function openScheduleModal(schedule) {
     case_ids: schedule && schedule.case_ids ? [...schedule.case_ids] : [],
     description: schedule ? schedule.description || '' : ''
   })
+  schedulePickerVisible.value = false
   scheduleModalVisible.value = true
 }
 
@@ -1364,6 +1414,37 @@ onMounted(async () => {
 }
 .filter-bar {
   margin-bottom: 16px;
+}
+.plan-body {
+  display: flex;
+  gap: 16px;
+}
+/* 左侧模块筛选面板：固定高度与右侧表格对齐，模块树在面板内滚动 */
+.module-panel {
+  flex: 0 0 260px;
+  width: 260px;
+  min-width: 0;
+  height: calc(100vh - 320px);
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 8px;
+  border: 1px solid #f0f0f0;
+  border-radius: 4px;
+  background: #fff;
+  box-sizing: border-box;
+}
+/* a-table 在 flex 子项里需要 min-width: 0 才不会溢出 */
+.table-panel {
+  flex: 1;
+  min-width: 0;
+}
+/* 小屏幕下隐藏左侧模块树，保证表格可用 */
+@media (max-width: 991px) {
+  .module-panel {
+    display: none;
+  }
 }
 .add-toolbar {
   display: flex;

@@ -107,7 +107,7 @@ async def update_project(
 @router.post("/{project_id}/code", summary="上传自动化代码包并初始化")
 async def upload_project_code(
     project_id: int,
-    file: UploadFile = File(..., description="自动化代码压缩包（zip），顶层需为唯一的项目文件夹且内含 tests 目录"),
+    file: UploadFile = File(..., description="自动化代码压缩包（zip），顶层需为唯一的项目文件夹且内含 tests 或 test_case 目录"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permissions_any("project:init")),
 ):

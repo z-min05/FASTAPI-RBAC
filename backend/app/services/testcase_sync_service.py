@@ -27,6 +27,7 @@ from app.models.testcase import TestCase
 from app.models.testcase_module import TestCaseModule
 from app.services.auto_file_service import ALLOW_MODULE_DIR_PATTERN, validate_codes
 from app.utils.logger import logger
+from app.utils.redis import acquire_lock, release_lock
 
 # 扫描时忽略的目录（含隐藏目录）
 _EXCLUDE_DIRS = {"__pycache__", "venv", ".venv", "node_modules", ".git", "site-packages"}
@@ -245,8 +246,25 @@ def dispatch_project_sync(project_id: int) -> None:
     task.add_done_callback(_running_tasks.discard)
 
 
+# 同步锁有效期（秒）：进程异常退出后最多占用这么久
+_SYNC_LOCK_TTL = 1800
+
+
 async def sync_project_testcases(project_id: int) -> None:
-    """后台任务：扫描并入库（只新增，已存在/编码不合法跳过），结果仅记日志"""
+    """后台任务入口：同一项目的同步在跨 worker 维度串行，避免并发重复入库"""
+    lock_name = f"testcase_sync:{project_id}"
+    lock_token = await acquire_lock(lock_name, _SYNC_LOCK_TTL)
+    if lock_token is None:
+        logger.info(f"用例同步跳过：项目 {project_id} 已有同步任务在执行")
+        return
+    try:
+        await _sync_project_testcases(project_id)
+    finally:
+        await release_lock(lock_name, lock_token)
+
+
+async def _sync_project_testcases(project_id: int) -> None:
+    """扫描并入库（只新增，已存在/编码不合法跳过），结果仅记日志"""
     try:
         async with AsyncSessionLocal() as db:
             project = await db.get(Project, project_id)

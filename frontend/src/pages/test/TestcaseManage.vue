@@ -57,6 +57,7 @@
         <TestcaseModuleTree
           :key="treeVersion"
           :project-id="filters.project_id"
+          :project-name="currentProjectName"
           :selected-module-id="filters.module_id"
           @select="onModuleSelect"
           @create-case="onCreateCaseFromTree"
@@ -195,7 +196,11 @@
           <a-select v-model:value="formState.case_type" :options="caseTypeOptions" />
         </a-form-item>
         <a-form-item label="来源">
-          <a-input v-model:value="formState.source" placeholder="需求文档 / 接口文档 / 经验总结" />
+          <a-input
+            v-model:value="formState.source"
+            :maxlength="255"
+            placeholder="需求文档 / 接口文档 / 经验总结"
+          />
         </a-form-item>
         <a-form-item label="前置条件">
           <a-textarea v-model:value="formState.precondition" :rows="2" placeholder="前置条件" />
@@ -735,6 +740,12 @@ async function handleExport() {
   URL.revokeObjectURL(link.href)
 }
 
+// 当前筛选项目的名称：传给模块树，用于弹窗「所属项目」只读展示（否则只能显示数字 ID）
+const currentProjectName = computed(() => {
+  const cur = projectOptions.value.find(p => p.value === filters.project_id)
+  return cur ? cur.label : ''
+})
+
 // 仅当选中项目且该项目已配置自动化根路径时显示「同步用例」
 const canSync = computed(() => {
   const cur = projectOptions.value.find(p => p.value === filters.project_id)
@@ -775,6 +786,11 @@ onMounted(() => {
   flex: 0 0 260px;
   width: 260px;
   min-width: 0;
+  /* 固定高度（与右侧表格整体高度对齐）：模块树在内部滚动，不再随模块数量无限撑高 */
+  height: calc(100vh - 320px);
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
   /* 兜底：超长模块名不允许把侧栏顶破，截断交给树节点内部处理 */
   overflow: hidden;
   padding: 8px;

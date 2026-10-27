@@ -62,7 +62,9 @@ class PlanTestCaseResponse(BaseModel):
     testcase_id: int
     title: str | None = None
     module: str | None = None
+    module_id: int | None = None  # 用例所属模块 ID（供前端按模块子树筛选）
     priority: str | None = None
+    tags: str | None = None  # 逗号分隔的覆盖点关键词（供前端筛选）
     case_type: str | None = None
     source: str | None = None
     status: str | None = None  # 用例管理状态

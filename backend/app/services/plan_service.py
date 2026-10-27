@@ -34,6 +34,7 @@ from app.services.auto_exec_service import (
 )
 from app.models.case_execution_log import CaseExecutionLog
 from app.db.session import AsyncSessionLocal
+from app.services.testcase_module_service import TestCaseModuleService
 
 
 def _empty_stats() -> dict:
@@ -47,6 +48,7 @@ class PlanService:
         self.pt_repo = PlanTestCaseRepository(db)
         self.project_repo = ProjectRepository(db)
         self.testcase_repo = TestCaseRepository(db)
+        self.module_service = TestCaseModuleService(db)
 
     # ---------- 计划查询 ----------
 
@@ -240,7 +242,7 @@ class PlanService:
         """按 agent_id 编排会话绑定：新计划/变更 → 新建会话；未变 → 沿用；空 → 解绑。
 
         - 旧会话一律保留（D2：历史对话留档，仅解绑引用）
-        - 绑定 Agent 需要真实用户（actor_user_id 有效），API Key 无归属用户时拒绝
+        - 绑定 Agent 需要真实用户（API 密钥已归属到具体用户，取其归属用户）
         """
         if not agent_id:
             plan.agent_id = None
@@ -267,12 +269,22 @@ class PlanService:
         params: PaginationParams,
         plan_id: int,
         keyword: str | None = None,
-        result: str | None = None,
+        results: list[str] | None = None,
         tester_id: int | None = None,
+        module_id: int | None = None,
+        include_children: bool = True,
     ) -> PaginatedResponse:
-        await self.get_plan(plan_id)
+        plan = await self.get_plan(plan_id)
+        # 按模块筛选：展开为 module_id 列表（含子树），与用例列表筛选语义一致
+        module_ids = None
+        if module_id is not None:
+            module_ids = (
+                await self.module_service.collect_subtree_module_ids(plan.project_id, module_id)
+                if include_children
+                else [module_id]
+            )
         result_page = await self.pt_repo.search_by_plan(
-            params, plan_id, keyword, result, tester_id
+            params, plan_id, keyword, results, tester_id, module_ids
         )
         items = result_page.items
         tc_map = await self._get_testcase_map([pt.testcase_id for pt in items])
@@ -591,10 +603,16 @@ class PlanService:
 
         # 启动一个后台任务串行执行
         import asyncio
-        from app.services.auto_exec_service import _execute_cases_sequential, _running_tasks
+        from app.services.auto_exec_service import (
+            _execute_cases_sequential,
+            _running_tasks,
+            mark_batch_started,
+        )
         from app.services.wecom_service import notify_plan_finished
         actor_id = actor_user_id(current_user)
         started_at = datetime.now()
+        # 登记本轮 token（Redis），使“停止”请求落到任意 worker 都能生效
+        batch_token = await mark_batch_started(plan_id)
         task = asyncio.create_task(
             _execute_cases_sequential(
                 AsyncSessionLocal,
@@ -603,6 +621,7 @@ class PlanService:
                 python_path,
                 project.auto_root_path,
                 actor_id,
+                batch_token,
             )
         )
         _running_tasks.add(task)
@@ -626,9 +645,9 @@ class PlanService:
         task.add_done_callback(done_callback)
 
     async def stop_execution(self, plan_id: int) -> None:
-        """停止指定计划的批量执行"""
-        from app.services.auto_exec_service import _stop_batch_flags
-        _stop_batch_flags[plan_id] = True
+        """停止指定计划的批量执行（标记写入 Redis，多 worker 下均生效）"""
+        from app.services.auto_exec_service import request_batch_stop
+        await request_batch_stop(plan_id)
 
     # ---------- 响应组装辅助 ----------
 
@@ -662,7 +681,9 @@ class PlanService:
             testcase_id=pt.testcase_id,
             title=tc.title if tc else None,
             module=tc.module if tc else None,
+            module_id=tc.module_id if tc else None,
             priority=tc.priority if tc else None,
+            tags=tc.tags if tc else None,
             case_type=tc.case_type if tc else None,
             source=tc.source if tc else None,
             status=tc.status if tc else None,

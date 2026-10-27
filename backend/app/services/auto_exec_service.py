@@ -14,6 +14,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from app.config import settings
+from app.utils.logger import logger
+from app.utils.redis import get_redis
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,11 +24,74 @@ if TYPE_CHECKING:
 # 存储后台任务引用，避免被 GC 回收
 _running_tasks: set = set()
 
-# 批量执行停止标志 {plan_id: True=停止}
+# 批量执行停止标志：Redis 不可用时的进程内降级存储 {plan_id: True=停止}
 _stop_batch_flags: dict[int, bool] = {}
+
+# Redis 键：autoexec:run:{plan_id} -> 本轮 run_token；autoexec:stop:{plan_id} -> 要停止的 run_token
+# 用 token 区分轮次，避免上一轮遗留的停止标记误伤下一轮
+_RUN_KEY_PREFIX = "autoexec:run:"
+_STOP_KEY_PREFIX = "autoexec:stop:"
+_BATCH_KEY_TTL = 24 * 3600
 
 # 日志上限，防止超大日志撑爆数据库
 _MAX_LOG_CHARS = 500_000
+
+
+async def mark_batch_started(plan_id: int) -> str:
+    """登记本轮批量执行的 run_token（跨 worker 可见），返回该 token"""
+    run_token = uuid.uuid4().hex
+    _stop_batch_flags.pop(plan_id, None)
+    try:
+        client = await get_redis()
+        await client.set(f"{_RUN_KEY_PREFIX}{plan_id}", run_token, ex=_BATCH_KEY_TTL)
+        await client.delete(f"{_STOP_KEY_PREFIX}{plan_id}")
+    except Exception as e:
+        logger.warning(f"[批量执行] Redis 运行标记写入失败，停止功能降级为进程内: {e}")
+    return run_token
+
+
+async def request_batch_stop(plan_id: int) -> None:
+    """请求停止指定计划正在进行的批量执行（任意 worker 收到请求都生效）"""
+    try:
+        client = await get_redis()
+        run_token = await client.get(f"{_RUN_KEY_PREFIX}{plan_id}")
+        if run_token:
+            # 只对当前轮次生效
+            await client.set(
+                f"{_STOP_KEY_PREFIX}{plan_id}", run_token, ex=_BATCH_KEY_TTL
+            )
+            return
+    except Exception as e:
+        logger.warning(f"[批量执行] Redis 停止标记写入失败，降级为进程内: {e}")
+    _stop_batch_flags[plan_id] = True
+
+
+async def _is_batch_stop_requested(plan_id: int, run_token: str) -> bool:
+    """检查本轮是否被要求停止；命中后立即清掉停止标记"""
+    try:
+        client = await get_redis()
+        stop_key = f"{_STOP_KEY_PREFIX}{plan_id}"
+        if await client.get(stop_key) == run_token:
+            await client.delete(stop_key)
+            return True
+    except Exception as e:
+        logger.warning(f"[批量执行] Redis 停止标记读取失败，回退进程内标记: {e}")
+    return bool(_stop_batch_flags.pop(plan_id, None))
+
+
+async def _clear_batch_run(plan_id: int, run_token: str) -> None:
+    """清理本轮的运行/停止标记，避免遗留标记影响下一轮"""
+    _stop_batch_flags.pop(plan_id, None)
+    try:
+        client = await get_redis()
+        run_key = f"{_RUN_KEY_PREFIX}{plan_id}"
+        if await client.get(run_key) == run_token:
+            await client.delete(run_key)
+        stop_key = f"{_STOP_KEY_PREFIX}{plan_id}"
+        if await client.get(stop_key) == run_token:
+            await client.delete(stop_key)
+    except Exception as e:
+        logger.warning(f"[批量执行] Redis 运行标记清理失败: {e}")
 
 
 def _strip_ansi(text: str) -> str:
@@ -278,52 +343,56 @@ async def _execute_cases_sequential(
     python_path: str,
     cwd: str,
     current_tester_id: int | None,
+    batch_token: str,
 ) -> None:
     """批量串行执行多个用例：执行一条 -> 结果摘要 + 完整日志即刻落库一条"""
     from sqlalchemy.ext.asyncio import AsyncSession
     from app.models.plan_testcase import PlanTestCase
 
-    for idx, (ptc_id, _, test_file, test_func) in enumerate(entries):
-        # 检查是否被要求停止
-        if _stop_batch_flags.get(plan_id):
-            _stop_batch_flags.pop(plan_id, None)
-            # 剩余未执行的标记为 skipped
-            remaining = entries[idx:]
+    try:
+        for idx, (ptc_id, _, test_file, test_func) in enumerate(entries):
+            # 检查是否被要求停止（Redis 共享，任意 worker 发起的停止都可见）
+            if await _is_batch_stop_requested(plan_id, batch_token):
+                # 剩余未执行的标记为 skipped
+                remaining = entries[idx:]
+                async with db_session_factory() as session:
+                    session: AsyncSession
+                    for rid, _, _, _ in remaining:
+                        pt = await session.get(PlanTestCase, rid)
+                        if pt and pt.plan_id == plan_id and pt.result == "running":
+                            pt.result = "skipped"
+                            pt.result_desc = "已被用户终止执行"
+                    await session.commit()
+                return
+
+            # 更新数据库标记为执行中
             async with db_session_factory() as session:
                 session: AsyncSession
-                for rid, _, _, _ in remaining:
-                    pt = await session.get(PlanTestCase, rid)
-                    if pt and pt.plan_id == plan_id and pt.result == "running":
-                        pt.result = "skipped"
-                        pt.result_desc = "已被用户终止执行"
-                await session.commit()
-            return
+                pt = await session.get(PlanTestCase, ptc_id)
+                if pt and pt.plan_id == plan_id and pt.result == "running":
+                    pt.result_desc = "正在执行中..."
+                    if current_tester_id:
+                        pt.tester_id = current_tester_id
+                    await session.commit()
 
-        # 更新数据库标记为执行中
-        async with db_session_factory() as session:
-            session: AsyncSession
-            pt = await session.get(PlanTestCase, ptc_id)
-            if pt and pt.plan_id == plan_id and pt.result == "running":
-                pt.result_desc = "正在执行中..."
-                if current_tester_id:
-                    pt.tester_id = current_tester_id
-                await session.commit()
-
-        # 执行单个并落库（一条指令 -> 一条结果 + 一条日志）
-        run_token = uuid.uuid4().hex
-        started_at = datetime.now()
-        result, summary, log_text = await _run_pytest_async(
-            python_path, test_file, test_func, cwd
-        )
-        await _save_execution_result(
-            db_session_factory,
-            plan_id,
-            ptc_id,
-            current_tester_id,
-            result,
-            summary,
-            log_text,
-            run_token,
-            started_at,
-            datetime.now(),
-        )
+            # 执行单个并落库（一条指令 -> 一条结果 + 一条日志）
+            run_token = uuid.uuid4().hex
+            started_at = datetime.now()
+            result, summary, log_text = await _run_pytest_async(
+                python_path, test_file, test_func, cwd
+            )
+            await _save_execution_result(
+                db_session_factory,
+                plan_id,
+                ptc_id,
+                current_tester_id,
+                result,
+                summary,
+                log_text,
+                run_token,
+                started_at,
+                datetime.now(),
+            )
+    finally:
+        # 本轮结束（正常/异常/被终止）后清理标记，避免影响下一轮
+        await _clear_batch_run(plan_id, batch_token)

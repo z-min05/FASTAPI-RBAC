@@ -15,7 +15,7 @@ class TestCaseBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     priority: str = Field("P1", pattern="^P[0-3]$")
     case_type: str = Field("function")
-    source: str | None = Field(None, max_length=50)
+    source: str | None = Field(None, max_length=255)
     precondition: str | None = None
     steps: str | None = None
     expected_result: str = Field(..., min_length=1)
@@ -34,13 +34,13 @@ class TestCaseUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=200)
     priority: str | None = Field(None, pattern="^P[0-3]$")
     case_type: str | None = None
-    source: str | None = None
+    source: str | None = Field(None, max_length=255)
     precondition: str | None = None
     steps: str | None = None
     expected_result: str | None = Field(None, min_length=1)
     status: str | None = None
-    tags: str | None = None
-    case_code: str | None = None
+    tags: str | None = Field(None, max_length=200)
+    case_code: str | None = Field(None, max_length=100)
 
 
 class TestCaseResponse(BaseModel):

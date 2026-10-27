@@ -26,7 +26,7 @@ class ProjectUpdate(BaseModel):
 
 class ProjectResponse(ProjectBase):
     id: int
-    # auto_root_path 为只读派生字段：= {配置的全局根目录}/{压缩包顶层目录名}/tests，
+    # auto_root_path 为只读派生字段：= {配置的全局根目录}/{压缩包顶层目录名}/tests 或 test_case，
     # 由代码包初始化任务写入，前端不可修改
     auto_root_path: str | None = Field(None, description="自动化测试根路径（初始化后自动生成）")
 

@@ -1,4 +1,4 @@
-from sqlalchemy import select, func, or_, asc, desc
+from sqlalchemy import select, func, or_, asc, desc, false
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.plan import TestPlan
 from app.models.plan_testcase import PlanTestCase
@@ -62,12 +62,16 @@ class PlanTestCaseRepository(BaseRepository):
         params: PaginationParams,
         plan_id: int,
         keyword: str | None = None,
-        result: str | None = None,
+        results: list[str] | None = None,
         tester_id: int | None = None,
+        module_ids: list[int] | None = None,
     ) -> PaginatedResponse:
         """计划用例分页列表（联查用例标题/模块做筛选），按添加时间正序"""
         filters = [PlanTestCase.plan_id == plan_id]
         join_cond = [PlanTestCase.testcase_id == TestCase.id]
+        if module_ids is not None:
+            # 空列表表示该模块（含子树）下没有任何模块可匹配，直接返回恒假条件
+            filters.append(TestCase.module_id.in_(module_ids) if module_ids else false())
         if keyword:
             filters.append(
                 or_(
@@ -75,8 +79,15 @@ class PlanTestCaseRepository(BaseRepository):
                     TestCase.module.ilike(f"%{keyword}%"),
                 )
             )
-        if result:
-            filters.append(PlanTestCase.result == result)
+        if results:
+            # 多选结果筛选；pending 表示未记录结果（result IS NULL）
+            values = [r for r in results if r != "pending"]
+            result_filters = []
+            if "pending" in results:
+                result_filters.append(PlanTestCase.result.is_(None))
+            if values:
+                result_filters.append(PlanTestCase.result.in_(values))
+            filters.append(or_(*result_filters) if result_filters else false())
         if tester_id is not None:
             filters.append(PlanTestCase.tester_id == tester_id)
 

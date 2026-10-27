@@ -95,15 +95,21 @@ async def delete_plan(
 async def get_plan_testcases(
     plan_id: int,
     keyword: str | None = Query(None, description="关键字（用例标题/模块）"),
-    result: str | None = Query(None, description="测试结果：pass/fail/blocked/skipped"),
+    results: str | None = Query(
+        None,
+        description="测试结果筛选，多选逗号分隔：pending/pass/fail/blocked/skipped/running（pending=待执行）",
+    ),
     tester_id: int | None = Query(None, description="测试人 user_id"),
+    module_id: int | None = Query(None, description="模块 ID（按用例所属模块筛选）"),
+    include_children: bool = Query(True, description="module_id 是否包含其子模块"),
     params: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permissions_any("plan:case:list")),
 ):
     service = PlanService(db)
+    result_list = [r.strip() for r in results.split(",") if r.strip()] if results else None
     result_page = await service.list_plan_testcases(
-        params, plan_id, keyword, result, tester_id
+        params, plan_id, keyword, result_list, tester_id, module_id, include_children
     )
     return Response.success(data=result_page.model_dump())
 

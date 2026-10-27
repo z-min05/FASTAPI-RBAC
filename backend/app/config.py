@@ -89,7 +89,7 @@ class Settings(BaseSettings):
 
     # ==================== 项目自动化代码初始化 ====================
     # 全局自动化根目录：所有项目的代码包统一解压到此目录下。
-    # 需预先存在且可写；每个项目的 auto_root_path = {BASE_DIR}/<项目目录名>/tests
+    # 需预先存在且可写；每个项目的 auto_root_path = {BASE_DIR}/<项目目录名>/{tests|test_case}
     # 为空视为未配置，上传代码包时直接报错
     PROJECT_CODE_BASE_DIR: str = ""
     # 上传 zip 大小上限（MB）

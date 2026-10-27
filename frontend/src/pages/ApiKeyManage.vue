@@ -22,9 +22,9 @@
         <template v-if="column.key === 'key_prefix'">
           <a-typography-text code>{{ record.key_prefix }}...</a-typography-text>
         </template>
-        <template v-if="column.key === 'role_id'">
-          <a-tag v-if="record.role_id" color="blue">{{ getRoleName(record.role_id) }}</a-tag>
-          <span v-else>未关联</span>
+        <template v-if="column.key === 'user_id'">
+          <a-tag v-if="record.user_id" color="blue">{{ record.user_name || `用户(${record.user_id})` }}</a-tag>
+          <span v-else>未绑定</span>
         </template>
         <template v-if="column.key === 'expires_at'">
           <span v-if="record.expires_at">{{ formatDate(record.expires_at) }}</span>
@@ -65,11 +65,12 @@
       width="560px"
     >
       <a-form :model="formState" :rules="formRules" ref="formRef" :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
+        <a-form-item label="归属用户">
+          <a-input :value="currentUserName" disabled />
+          <div class="form-hint">密钥的权限与操作归属均与当前用户一致</div>
+        </a-form-item>
         <a-form-item name="name" label="密钥名称" required>
           <a-input v-model:value="formState.name" placeholder="请输入密钥名称" />
-        </a-form-item>
-        <a-form-item name="role_id" label="关联角色" required>
-          <a-select v-model:value="formState.role_id" placeholder="请选择关联角色" :options="roleOptions" />
         </a-form-item>
         <a-form-item label="过期时间">
           <a-date-picker
@@ -108,20 +109,25 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
-import { getApiKeys, getApiKeyRoles, createApiKey, updateApiKeyStatus, deleteApiKey, regenerateApiKey } from '@/api/api_key'
+import { getApiKeys, createApiKey, updateApiKeyStatus, deleteApiKey, regenerateApiKey } from '@/api/api_key'
 import { TABLE_SCROLL } from '@/utils/tableScroll'
+import { useAuthStore } from '@/stores/auth'
 import dayjs from 'dayjs'
+
+const authStore = useAuthStore()
+// 密钥归属用户固定为当前登录用户
+const currentUserName = computed(
+  () => authStore.userInfo?.nickname || authStore.userInfo?.username || '当前用户'
+)
 
 const loading = ref(false)
 const submitLoading = ref(false)
 const modalVisible = ref(false)
 const keyResultVisible = ref(false)
 const createdFullKey = ref('')
-const roleOptions = ref([])
-const roleMap = ref({})
 
 const tableData = ref([])
 const pagination = reactive({
@@ -135,20 +141,18 @@ const pagination = reactive({
 const formRef = ref(null)
 const formState = reactive({
   name: '',
-  role_id: undefined,
   expires_at: undefined,
 })
 
 const formRules = {
   name: [{ required: true, message: '请输入密钥名称', trigger: 'blur' }],
-  role_id: [{ required: true, message: '请选择关联角色', trigger: 'change' }],
 }
 
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
   { title: '名称', dataIndex: 'name', key: 'name', width: 160, ellipsis: true },
   { title: '密钥前缀', key: 'key_prefix', width: 180 },
-  { title: '关联角色', key: 'role_id', width: 120 },
+  { title: '归属用户', key: 'user_id', width: 140 },
   { title: '过期时间', key: 'expires_at', width: 170 },
   { title: '状态', key: 'is_active', width: 80 },
   { title: '最后使用', key: 'last_used_at', width: 160 },
@@ -158,23 +162,6 @@ const columns = [
 
 function formatDate(val) {
   return val ? dayjs(val).format('YYYY-MM-DD HH:mm') : ''
-}
-
-function getRoleName(roleId) {
-  return roleMap.value[roleId] || `角色(${roleId})`
-}
-
-async function loadRoles() {
-  try {
-    const res = await getApiKeyRoles()
-    if (res.code === 200 && res.data) {
-      roleOptions.value = res.data.map(r => ({ label: r.name, value: r.id }))
-      roleMap.value = {}
-      res.data.forEach(r => { roleMap.value[r.id] = r.name })
-    }
-  } catch (e) {
-    // 静默
-  }
 }
 
 async function loadData() {
@@ -203,7 +190,6 @@ function handleTableChange(pag) {
 
 function resetForm() {
   formState.name = ''
-  formState.role_id = undefined
   formState.expires_at = undefined
   formRef.value?.clearValidate()
 }
@@ -223,7 +209,6 @@ async function handleSubmit() {
   try {
     const res = await createApiKey({
       name: formState.name,
-      role_id: formState.role_id || null,
       expires_at: formState.expires_at || null,
     })
     if (res.code === 200 && res.data) {
@@ -297,7 +282,6 @@ function copyKey() {
 }
 
 onMounted(() => {
-  loadRoles()
   loadData()
 })
 </script>
@@ -305,5 +289,10 @@ onMounted(() => {
 <style scoped>
 .page-header {
   margin-bottom: 16px;
+}
+.form-hint {
+  margin-top: 4px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
 }
 </style>
