@@ -75,6 +75,12 @@ const routes = [
         meta: { title: 'Python 环境管理', icon: 'CodeOutlined' }
       },
       {
+        path: 'tools',
+        name: 'ToolManage',
+        component: () => import('@/pages/ToolManage.vue'),
+        meta: { title: '工具管理', icon: 'ToolOutlined' }
+      },
+      {
         path: 'test/projects',
         name: 'ProjectManage',
         component: () => import('@/pages/test/ProjectManage.vue'),

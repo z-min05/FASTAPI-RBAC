@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     # 为空视为未配置，点击下载时直接报错
     PROJECT_CODE_TEMPLATE_ZIP: str = ""
 
+    # ==================== 工具管理 ====================
+    # 工具压缩包与 README 文档的存放根目录；留空则使用 backend/tool_storage
+    TOOL_STORAGE_DIR: str = ""
+    # 单个工具压缩包大小上限（MB）
+    TOOL_UPLOAD_MAX_MB: int = 200
+
     # ==================== 加密（api_key 敏感字段） ====================
     # 用于 Fernet 对称加密；生产环境务必更换为随机 base64 字符串（32 bytes url-safe base64）。
     ENCRYPTION_KEY: str = "D4GbYVEXicX0l9ckg9UwP1LavrUEfkgJex5yJRx4T_s="
@@ -118,6 +124,15 @@ class Settings(BaseSettings):
             return raw
         backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return os.path.join(backend_dir, "agent_workspaces")
+
+    @property
+    def tool_storage_root(self) -> str:
+        """工具文件存放根目录；未配置时取 backend 目录下的 tool_storage"""
+        raw = (self.TOOL_STORAGE_DIR or "").strip()
+        if raw:
+            return os.path.abspath(raw)
+        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(backend_dir, "tool_storage")
 
     @property
     def cors_origins_list(self) -> List[str]:

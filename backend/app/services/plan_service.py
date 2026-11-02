@@ -738,7 +738,7 @@ class PlanService:
         writer.writerow([
             "用例标题", "模块", "优先级", "用例类型",
             "前置条件", "测试步骤", "预期结果",
-            "测试人", "结果", "结果描述",
+            "测试人", "结果",
         ])
         for pt in pts:
             tc = tc_map.get(pt.testcase_id)
@@ -754,6 +754,5 @@ class PlanService:
                 tc.expected_result if tc else "",
                 (user.nickname or user.username) if user else "",
                 _result_label,
-                pt.result_desc or "",
             ])
         return buf.getvalue()

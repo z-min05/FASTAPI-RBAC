@@ -23,6 +23,7 @@ from app.models.plan_testcase import PlanTestCase
 from app.models.plan_schedule import PlanSchedule
 from app.models.wecom_robot import WecomRobot
 from app.models.python_env import PythonEnv
+from app.models.tool import Tool
 
 __all__ = [
     "User",
@@ -50,4 +51,5 @@ __all__ = [
     "PlanSchedule",
     "WecomRobot",
     "PythonEnv",
+    "Tool",
 ]

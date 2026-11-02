@@ -20,13 +20,13 @@
       >
         <template v-for="menu in menuList" :key="menu.path || menu.id">
           <!-- 目录类型：有子菜单 -->
-          <a-sub-menu v-if="menu.children && menu.children.length" :key="String(menu.id)">
+          <a-sub-menu v-if="visibleChildren(menu).length" :key="String(menu.id)">
             <template #title>
               <component :is="iconMap[menu.icon]" v-if="menu.icon && iconMap[menu.icon]" />
               <span>{{ menu.name }}</span>
             </template>
             <a-menu-item
-              v-for="child in menu.children"
+              v-for="child in visibleChildren(menu)"
               :key="child.path"
             >
               <component :is="iconMap[child.icon]" v-if="child.icon && iconMap[child.icon]" />
@@ -186,6 +186,10 @@ const openKeys = ref([])
 const menuList = computed(() => {
   return (authStore.menus || []).filter(m => m.menu_type !== 'button')
 })
+
+// 按钮类型只用于权限控制，不能作为导航项渲染；
+// 顶层菜单的按钮子项若不过滤，会被当成子菜单显示在侧边栏
+const visibleChildren = (menu) => (menu.children || []).filter(c => c.menu_type !== 'button')
 
 // 计算当前路由所在目录需要展开的 key
 function findParentKeys(menus, targetPath) {

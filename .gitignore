@@ -87,6 +87,7 @@ backend/snapshots/
 backend/yolo_models/
 backend/streams/
 backend/agent_workspaces/
+backend/tool_storage/
 
 # Alembic
 alembic/versions/__pycache__/

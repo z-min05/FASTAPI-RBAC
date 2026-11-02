@@ -735,6 +735,122 @@ async def _ensure_python_env_module(db):
                 await db.execute(role_menus.insert().values(role_id=user_role.id, menu_id=m.id))
 
 
+# ==================== 工具管理模块定义 ====================
+TOOL_PERMISSIONS = [
+    {"name": "工具列表", "code": "tool:list", "module": "tool", "action": "list"},
+    {"name": "上传工具", "code": "tool:create", "module": "tool", "action": "create"},
+    {"name": "下载工具包", "code": "tool:download", "module": "tool", "action": "download"},
+    {"name": "删除工具", "code": "tool:delete", "module": "tool", "action": "delete"},
+]
+
+TOOL_MENU_CHILDREN = [
+    {"name": "上传工具", "menu_type": "button", "permission": "tool:create", "sort": 1},
+    {"name": "下载工具包", "menu_type": "button", "permission": "tool:download", "sort": 2},
+    {"name": "删除工具", "menu_type": "button", "permission": "tool:delete", "sort": 3},
+]
+
+
+async def _ensure_tool_module(db):
+    """幂等创建工具管理模块的权限、菜单（含按钮）与角色授权"""
+    # 1. 权限
+    perm_objs = {}
+    for p in TOOL_PERMISSIONS:
+        result = await db.execute(select(Permission).where(Permission.code == p["code"]))
+        perm = result.scalar_one_or_none()
+        if not perm:
+            perm = Permission(**p)
+            db.add(perm)
+            await db.flush()
+        perm_objs[p["code"]] = perm
+
+    # 2. 菜单：一级菜单「工具管理」-> 按钮
+    tool_menu = (await db.execute(
+        select(Menu).where(Menu.path == "/tools", Menu.menu_type == "menu")
+    )).scalars().first()
+    if not tool_menu:
+        max_sort = (await db.execute(
+            select(func.max(Menu.sort)).where(
+                Menu.parent_id.is_(None), Menu.menu_type != "button"
+            )
+        )).scalar()
+        tool_menu = Menu(
+            name="工具管理", path="/tools", component="tools/ToolManage",
+            icon="ToolOutlined", menu_type="menu",
+            sort=(max_sort or 0) + 1, visible=True, permission="tool:list",
+        )
+        db.add(tool_menu)
+        await db.flush()
+    else:
+        tool_menu.name = "工具管理"
+        tool_menu.component = "tools/ToolManage"
+        tool_menu.icon = "ToolOutlined"
+        tool_menu.permission = "tool:list"
+        await db.flush()
+
+    module_menus = [tool_menu]
+
+    # 按钮
+    for btn_def in TOOL_MENU_CHILDREN:
+        result = await db.execute(
+            select(Menu).where(
+                Menu.name == btn_def["name"],
+                Menu.parent_id == tool_menu.id,
+                Menu.menu_type == "button",
+            )
+        )
+        btn = result.scalar_one_or_none()
+        if not btn:
+            btn = Menu(
+                name=btn_def["name"], menu_type="button",
+                permission=btn_def["permission"], parent_id=tool_menu.id, sort=btn_def["sort"],
+            )
+            db.add(btn)
+            await db.flush()
+        module_menus.append(btn)
+
+    # 3. 角色授权（admin 全量；user 仅列表权限与菜单可见）
+    admin_role = (await db.execute(select(Role).where(Role.code == "admin"))).scalar_one_or_none()
+    user_role = (await db.execute(select(Role).where(Role.code == "user"))).scalar_one_or_none()
+
+    for code, perm in perm_objs.items():
+        if admin_role:
+            r = await db.execute(
+                select(role_permissions).where(
+                    role_permissions.c.role_id == admin_role.id,
+                    role_permissions.c.permission_id == perm.id,
+                )
+            )
+            if not r.first():
+                await db.execute(
+                    role_permissions.insert().values(role_id=admin_role.id, permission_id=perm.id)
+                )
+        if user_role and code == "tool:list":
+            r = await db.execute(
+                select(role_permissions).where(
+                    role_permissions.c.role_id == user_role.id,
+                    role_permissions.c.permission_id == perm.id,
+                )
+            )
+            if not r.first():
+                await db.execute(
+                    role_permissions.insert().values(role_id=user_role.id, permission_id=perm.id)
+                )
+
+    for m in module_menus:
+        if admin_role:
+            r = await db.execute(
+                select(role_menus).where(role_menus.c.role_id == admin_role.id, role_menus.c.menu_id == m.id)
+            )
+            if not r.first():
+                await db.execute(role_menus.insert().values(role_id=admin_role.id, menu_id=m.id))
+        if user_role and m.menu_type != "button":
+            r = await db.execute(
+                select(role_menus).where(role_menus.c.role_id == user_role.id, role_menus.c.menu_id == m.id)
+            )
+            if not r.first():
+                await db.execute(role_menus.insert().values(role_id=user_role.id, menu_id=m.id))
+
+
 async def seed():
     # 1. 创建所有表
     async with engine.begin() as conn:
@@ -745,12 +861,13 @@ async def seed():
         result = await db.execute(select(User).limit(1))
         if result.scalar_one_or_none():
             # 已有数据：增量补充新增模块的权限/菜单/角色授权（幂等）
-            print("检测到已有数据，增量补充测试管理/AI 助手/API 密钥/企业微信机器人/Python 环境管理模块权限/菜单")
+            print("检测到已有数据，增量补充测试管理/AI 助手/API 密钥/企业微信机器人/Python 环境管理/工具管理模块权限/菜单")
             await _ensure_test_module(db)
             await _ensure_agent_module(db)
             await _ensure_api_key_module(db)
             await _ensure_wecom_module(db)
             await _ensure_python_env_module(db)
+            await _ensure_tool_module(db)
             await db.commit()
             await _sync_casbin(db)
             print("增量补充完成")
@@ -1040,6 +1157,9 @@ async def seed():
 
         # 全新安装：Python 环境管理模块（权限/菜单/按钮/角色授权）
         await _ensure_python_env_module(db)
+
+        # 全新安装：工具管理模块（权限/菜单/按钮/角色授权）
+        await _ensure_tool_module(db)
 
         await db.commit()
         print("种子数据初始化完成")
